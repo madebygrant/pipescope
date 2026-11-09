@@ -16,3 +16,4 @@ GitHub picks up your `gh` CLI login if you have one. Bitbucket needs your Atlass
 - [Using Pipescope](docs/usage.md): the list, logs, notifications and keyboard shortcuts
 - [How it works](docs/how-it-works.md): polling, rate limits and what each provider can do
 - [Development](docs/development.md): running, testing, building and the app icons
+- [Roadmap](docs/roadmap.md): what's planned, and the plan to connect with coding agents
