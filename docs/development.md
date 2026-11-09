@@ -34,6 +34,21 @@ The app lands in `src-tauri/target/release/bundle/macos/Pipescope.app`. A clean 
 
 The build isn't signed or notarised. That's fine on the machine that built it. If you copy it to another Mac, macOS will block it until you right-click it and choose Open.
 
+## CI
+
+GitHub Actions runs two workflows on a macOS runner.
+
+- **Checks** (`.github/workflows/checks.yml`) runs on every push to `main` and every pull request. It builds the UI, runs Vitest, clippy with warnings as errors, and the Rust tests.
+- **Build** (`.github/workflows/build.yml`) makes a universal `.dmg` that runs on Apple Silicon and Intel. Start it by hand from the Actions tab, and the `.dmg` appears as an artifact on the run. Pushing a tag like `v0.2.0` also attaches the build to a draft GitHub release.
+
+To release, run this from a clean, up-to-date `main`:
+
+```sh
+pnpm release patch    # or minor, major, or an exact version like 0.3.0
+```
+
+It sets the version in `package.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`, commits, tags `vX.Y.Z` and pushes. Build then makes the draft release, which you publish from GitHub. These builds aren't signed either.
+
 ## Icons
 
 `assets/logo.svg` is the app icon and `assets/tray-mark.svg` the menu bar mark. To regenerate the app icons:
