@@ -194,6 +194,7 @@ pub fn run() {
             commands::rerun,
             commands::cancel,
             commands::get_log,
+            commands::open_log_window,
             commands::set_repo_flag,
             commands::set_onboarded,
         ])

@@ -18,6 +18,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("keychain error: {0}")]
     Keyring(#[from] keyring::Error),
+    #[error("window error: {0}")]
+    Window(#[from] tauri::Error),
     #[error("{0}")]
     Other(String),
 }

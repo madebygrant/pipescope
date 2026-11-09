@@ -57,6 +57,7 @@ export interface LogTail {
   step: string;
   steps: LogStep[];
   text: string;
+  skipped: number;
   webUrl: string;
 }
 

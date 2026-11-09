@@ -231,17 +231,18 @@ impl Bitbucket {
                 step: String::new(),
                 steps,
                 text: "This pipeline has no steps.".into(),
+                skipped: 0,
                 web_url: run.web_url.clone(),
             });
         };
         let web_url = format!("{}/steps/{}", run.web_url, chosen.uuid);
         let log_url = self.api.url(&["repositories", ws, slug, "pipelines", &run.id, "steps", &chosen.uuid, "log"]);
-        let text = match self.api.get_text(log_url).await {
+        let (text, skipped) = match self.api.get_text(log_url).await {
             Ok(raw) => tail_log(&raw),
-            Err(e) if e.is_access_denied() => "This step has no log yet.".into(),
+            Err(e) if e.is_access_denied() => ("This step has no log yet.".into(), 0),
             Err(e) => return Err(e),
         };
-        Ok(LogTail { step_id: chosen.uuid.clone(), step: step_name(chosen), steps, text, web_url })
+        Ok(LogTail { step_id: chosen.uuid.clone(), step: step_name(chosen), steps, text, skipped, web_url })
     }
 }
 

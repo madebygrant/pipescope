@@ -12,6 +12,7 @@ export const api = {
   rerun: (key: string, failedOnly: boolean) => invoke<void>("rerun", { key, failedOnly }),
   cancel: (key: string) => invoke<void>("cancel", { key }),
   log: (key: string, step?: string) => invoke<LogTail>("get_log", { key, step: step ?? null }),
+  openLogWindow: (key: string, step?: string) => invoke<void>("open_log_window", { key, step: step ?? null }),
   setRepoFlag: (repoId: string, flag: "pinned" | "muted", on: boolean) =>
     invoke<void>("set_repo_flag", { repoId, flag, on }),
   setOnboarded: () => invoke<void>("set_onboarded"),

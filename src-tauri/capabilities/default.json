@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-hide", "opener:default"]
+  "description": "Capability for the popover and log windows",
+  "windows": ["main", "log-*"],
+  "permissions": ["core:default", "core:window:allow-hide", "core:window:allow-close", "opener:default"]
 }

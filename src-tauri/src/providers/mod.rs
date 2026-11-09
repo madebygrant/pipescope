@@ -98,9 +98,11 @@ fn split_repo(full_name: &str) -> Result<(&str, &str)> {
     full_name.split_once('/').ok_or_else(|| Error::Other(format!("bad repo name: {full_name}")))
 }
 
-pub fn tail_log(raw: &str) -> String {
+// Returns the cleaned tail and how many lines were dropped before it.
+pub fn tail_log(raw: &str) -> (String, usize) {
     let lines: Vec<String> = raw.lines().map(clean_line).collect();
-    lines[lines.len().saturating_sub(LOG_TAIL_LINES)..].join("\n")
+    let skipped = lines.len().saturating_sub(LOG_TAIL_LINES);
+    (lines[skipped..].join("\n"), skipped)
 }
 
 fn clean_line(line: &str) -> String {
@@ -138,13 +140,14 @@ mod tests {
     #[test]
     fn cleans_github_log_lines() {
         let raw = "\u{feff}2026-11-09T01:02:03.4567890Z ##[group]Run tests\n2026-11-09T01:02:04.0000000Z \u{1b}[31merror\u{1b}[0m: boom\nplain line";
-        assert_eq!(tail_log(raw), "##[group]Run tests\nerror: boom\nplain line");
+        assert_eq!(tail_log(raw), ("##[group]Run tests\nerror: boom\nplain line".into(), 0));
     }
 
     #[test]
     fn keeps_only_the_tail() {
         let raw: String = (0..600).map(|i| format!("line {i}\n")).collect();
-        let tail = tail_log(&raw);
+        let (tail, skipped) = tail_log(&raw);
+        assert_eq!(skipped, 100);
         assert_eq!(tail.lines().count(), LOG_TAIL_LINES);
         assert!(tail.starts_with("line 100\n"));
     }

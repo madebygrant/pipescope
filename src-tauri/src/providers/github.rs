@@ -184,18 +184,19 @@ impl GitHub {
                 step: String::new(),
                 steps,
                 text: "This run has no jobs.".into(),
+                skipped: 0,
                 web_url: run.web_url.clone(),
             });
         };
         let web_url = job.html_url.clone().unwrap_or_else(|| run.web_url.clone());
         let job_id = job.id.to_string();
-        let text = match self.api.get_text(self.api.url(&["repos", owner, name, "actions", "jobs", &job_id, "logs"])).await {
+        let (text, skipped) = match self.api.get_text(self.api.url(&["repos", owner, name, "actions", "jobs", &job_id, "logs"])).await {
             Ok(raw) => tail_log(&raw),
             // GitHub only serves a job's log once the job has finished.
-            Err(e) if e.is_access_denied() => "The log is available once this job finishes.".into(),
+            Err(e) if e.is_access_denied() => ("The log is available once this job finishes.".into(), 0),
             Err(e) => return Err(e),
         };
-        Ok(LogTail { step_id: job_id, step: job.name.clone(), steps, text, web_url })
+        Ok(LogTail { step_id: job_id, step: job.name.clone(), steps, text, skipped, web_url })
     }
 }
 

@@ -98,3 +98,24 @@ export const IconCopy = () => (
     <path d="M10.5 5V3.5A1 1 0 0 0 9.5 2.5h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1H5" />
   </svg>
 );
+export const IconChevron = ({ dir }: { dir: "up" | "down" | "right" }) => (
+  <svg {...ui} width={12} height={12}>
+    <path d={dir === "up" ? "M4 10l4-4 4 4" : dir === "down" ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4"} />
+  </svg>
+);
+export const IconWrap = () => (
+  <svg {...ui} width={13} height={13}>
+    <path d="M2.5 4h11M2.5 8h9a2 2 0 0 1 0 4H8M9.5 10.5L8 12l1.5 1.5M2.5 12h3" />
+  </svg>
+);
+export const IconExpand = () => (
+  <svg {...ui} width={14} height={14}>
+    <path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9" />
+  </svg>
+);
+export const IconWarning = () => (
+  <svg {...ui} width={14} height={14}>
+    <path d="M8 2.5l6 10.5H2z" />
+    <path d="M8 6.8v2.6M8 11.4v.1" />
+  </svg>
+);

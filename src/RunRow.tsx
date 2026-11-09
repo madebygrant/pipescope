@@ -35,10 +35,8 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
   const active = isActive(run);
   const finished = !active && run.status !== "waiting";
   const time = duration(run, now);
-  const status = active && time ? `${STATUS_LABEL[run.status]} · ${time}` : STATUS_LABEL[run.status];
-  const meta = [status, run.branch, run.actor, ago(run.createdAt, now), finished ? time : null]
-    .filter(Boolean)
-    .join(" · ");
+  const status = active && time ? `${STATUS_LABEL[run.status]} ${time}` : STATUS_LABEL[run.status];
+  const meta = [run.branch, run.actor, ago(run.createdAt, now), finished ? time : null].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -62,7 +60,10 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
               {p.pending.kind === "rerun" ? "Re-run requested…" : "Cancelling…"}
             </span>
           ) : (
-            meta
+            <>
+              <span className={`status-text ${run.status}`}>{status}</span>
+              {meta && ` · ${meta}`}
+            </>
           )}
         </span>
       </button>

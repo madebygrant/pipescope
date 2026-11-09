@@ -135,5 +135,89 @@ export function ago(iso: string, now: number) {
 
 // Matches lines worth jumping to in a CI log.
 const ERROR_LINE = /##\[error\]|\berror\b|\bfailed\b|\bfailure\b|exception|panicked|traceback|\bFAIL\b|ERR!/i;
+// Summary lines like "0 failed" or "errors: 0" report success, so they don't count.
+const ZERO_COUNT = /\b0 (errors?|failed|failures)\b|\b(errors?|failed|failures):? 0\b/gi;
 
-export const isErrorLine = (line: string) => ERROR_LINE.test(line);
+export const isErrorLine = (line: string) => ERROR_LINE.test(line.replace(ZERO_COUNT, ""));
+
+export type LineKind = "plain" | "error" | "warning" | "command" | "debug";
+
+export interface LogLine {
+  n: number;
+  text: string;
+  kind: LineKind;
+  group: number | null;
+}
+
+export interface LogGroup {
+  id: number;
+  title: string;
+  n: number;
+  size: number;
+  hasError: boolean;
+}
+
+export interface ParsedLog {
+  lines: LogLine[];
+  groups: LogGroup[];
+}
+
+const MARKER = /^##\[(\w+)\](.*)$/;
+
+// Turns GitHub workflow markers (##[group], ##[error], [command]) and Bitbucket's
+// "+ cmd" echo into line kinds and collapsible groups.
+export function parseLog(text: string): ParsedLog {
+  const lines: LogLine[] = [];
+  const groups: LogGroup[] = [];
+  let open: LogGroup | null = null;
+  text.split("\n").forEach((raw, i) => {
+    const n = i + 1;
+    const marker = raw.match(MARKER);
+    const tag = marker?.[1].toLowerCase();
+    if (tag === "group") {
+      open = { id: groups.length, title: marker![2] || "Group", n, size: 0, hasError: false };
+      groups.push(open);
+      return;
+    }
+    if (tag === "endgroup") {
+      open = null;
+      return;
+    }
+    let body = marker ? marker[2] : raw;
+    let kind: LineKind = "plain";
+    if (tag === "error") kind = "error";
+    else if (tag === "warning") kind = "warning";
+    else if (tag === "debug") kind = "debug";
+    else if (tag === "command" || raw.startsWith("[command]")) {
+      kind = "command";
+      body = body.replace(/^\[command\]/, "");
+    } else if (raw.startsWith("+ ")) kind = "command";
+    else if (isErrorLine(raw)) kind = "error";
+    else if (/^\s*warn(ing)?\b|\bwarning:/i.test(raw) || /\bWARN\b/.test(raw)) kind = "warning";
+    const g: LogGroup | null = open;
+    if (g) {
+      g.size++;
+      if (kind === "error") g.hasError = true;
+    }
+    lines.push({ n, text: body, kind, group: g ? g.id : null });
+  });
+  return { lines, groups };
+}
+
+// Indices into `lines` for the errors-only view: each error with `context` lines either side,
+// and null where lines were skipped.
+export function errorContext(lines: LogLine[], context = 2): (number | null)[] {
+  const keep = new Set<number>();
+  lines.forEach((l, i) => {
+    if (l.kind !== "error") return;
+    for (let j = Math.max(0, i - context); j <= Math.min(lines.length - 1, i + context); j++) keep.add(j);
+  });
+  const out: (number | null)[] = [];
+  let last = -1;
+  for (const i of [...keep].sort((a, b) => a - b)) {
+    if (last >= 0 && i > last + 1) out.push(null);
+    out.push(i);
+    last = i;
+  }
+  return out;
+}

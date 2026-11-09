@@ -118,6 +118,8 @@ pub struct LogTail {
     pub step: String,
     pub steps: Vec<LogStep>,
     pub text: String,
+    // Lines dropped from the start of the log to keep it to the tail.
+    pub skipped: usize,
     pub web_url: String,
 }
 

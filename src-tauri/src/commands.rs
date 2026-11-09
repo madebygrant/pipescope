@@ -143,6 +143,32 @@ pub async fn get_log(app: AppHandle, key: String, step: Option<String>) -> Resul
 }
 
 #[tauri::command]
+pub fn open_log_window(app: AppHandle, key: String, step: Option<String>) -> Result<()> {
+    let run = app.state::<AppState>().store.lock().unwrap().get_run(&key)?;
+    let run = run.ok_or_else(|| Error::Other("That run is no longer in the list.".into()))?;
+    // Window labels only allow a few characters, so map the run key onto them.
+    let label: String = format!("log-{key}").chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    if let Some(window) = app.get_webview_window(&label) {
+        window.show()?;
+        return Ok(window.set_focus()?);
+    }
+    // The page reads which run to show from this global before React starts.
+    let init = format!(
+        "window.__PIPESCOPE_LOG__ = {};",
+        serde_json::json!({ "key": key, "step": step })
+    );
+    let window = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(format!("{} #{} · {}", run.title, run.number, run.repo))
+        .inner_size(900.0, 640.0)
+        .min_inner_size(480.0, 320.0)
+        .center()
+        .initialization_script(&init)
+        .build()?;
+    window.set_focus()?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_repo_flag(app: AppHandle, repo_id: String, flag: String, on: bool) -> Result<()> {
     if flag != "pinned" && flag != "muted" {
         return Err(Error::Other(format!("unknown repo flag: {flag}")));

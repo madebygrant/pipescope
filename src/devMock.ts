@@ -67,7 +67,21 @@ const statuses: ProviderStatus[] = [
 
 const settings = { notifyAll: false, bitbucketEmail: null, pinned: ["github:hatchd/api"], muted: ["github:hatchd/docs"], onboarded: true };
 const log = [
-  "Run npm test",
+  "##[group]Run actions/checkout@v4",
+  "with:",
+  "  repository: hatchd/web",
+  "##[endgroup]",
+  "Syncing repository: hatchd/web",
+  "[command]/usr/bin/git version",
+  "git version 2.47.1",
+  "##[group]Run npm ci",
+  "npm ci",
+  "##[endgroup]",
+  "npm WARN deprecated inflight@1.0.6: This module is not supported",
+  "added 812 packages in 14s",
+  "##[group]Run npm test",
+  "npm test",
+  "##[endgroup]",
   "> web@1.0.0 test",
   "PASS src/cart.test.ts",
   "FAIL src/login.test.ts",
@@ -75,8 +89,10 @@ const log = [
   "    expect(received).toBe(expected)",
   "    Expected: 401",
   "    Received: 500",
-  ...Array.from({ length: 30 }, (_, i) => `    at step ${i}`),
-  "Tests: 1 failed, 41 passed, 42 total",
+  ...Array.from({ length: 30 }, (_, i) => `      at Object.<anonymous> (src/login.test.ts:${40 + i}:5)`),
+  "Test Suites: 1 failed, 11 passed, 12 total",
+  "Tests:       1 failed, 41 passed, 42 total",
+  "Snapshots:   0 total",
   "##[error]Process completed with exit code 1.",
 ].join("\n");
 
@@ -92,6 +108,7 @@ const responses: Record<string, unknown> = {
       { id: "2", name: "test", status: "failed" },
     ],
     text: log,
+    skipped: 1240,
     webUrl: "https://example.com",
   },
 };

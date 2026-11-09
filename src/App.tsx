@@ -226,7 +226,9 @@ export default function App() {
     );
   }
   if (view.kind === "log") {
-    return <LogView run={view.run} onBack={() => setView({ kind: "list" })} />;
+    // Look the run up again so the log view sees status changes and knows when to stop tailing.
+    const run = runs.find((r) => r.key === view.run.key) ?? view.run;
+    return <LogView run={run} onBack={() => setView({ kind: "list" })} />;
   }
 
   const needsSetup = statuses.filter((s) => s.state === "notConfigured" || s.state === "error");
@@ -353,13 +355,17 @@ export default function App() {
         )}
         {filter !== "running" && sections.failing.length > 0 && (
           <section className="group attention">
-            <h2>Needs attention</h2>
+            <h2>
+              Needs attention <span className="section-count">{sections.failing.length}</span>
+            </h2>
             {sections.failing.map((r) => row(r, true))}
           </section>
         )}
         {filter !== "failing" && sections.running.length > 0 && (
           <section className="group">
-            <h2>Running</h2>
+            <h2>
+              Running <span className="section-count">{sections.running.length}</span>
+            </h2>
             {sections.running.map((r) => row(r, true))}
           </section>
         )}
@@ -401,12 +407,19 @@ export default function App() {
       </main>
 
       <footer className="hints" aria-hidden>
-        <span>↑↓ select</span>
-        <span>↵ open</span>
-        <span>⌘L log</span>
-        <span>⌘R re-run</span>
-        <span>⌘. cancel</span>
-        <span>esc close</span>
+        {[
+          ["↑↓", "select"],
+          ["↵", "open"],
+          ["⌘L", "log"],
+          ["⌘R", "re-run"],
+          ["⌘.", "cancel"],
+          ["esc", "close"],
+        ].map(([key, what]) => (
+          <span key={key}>
+            <kbd>{key}</kbd>
+            {what}
+          </span>
+        ))}
       </footer>
     </div>
   );
