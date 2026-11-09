@@ -7,7 +7,7 @@ Pipescope's job is to be the fastest way to find out what broke. Later it will h
 1. **Compare with the last passing run.** Show only the log lines that are new compared with the last green run of the same workflow.
 2. **Flaky test detection.** Mark tests that failed and then passed on the same commit. Offer a one-key re-run, and optionally re-run them automatically.
 3. **Watch a run.** Pin any run, including someone else's, and get one notification when it finishes.
-4. **Approvals and manual steps.** Approve GitHub deployments that are waiting on an environment, and start Bitbucket manual steps, from the menu bar.
+4. **Approvals and manual steps.** Approve or reject GitHub deployments waiting on an environment, from the menu bar. GitHub only accepts this from a required reviewer, so show "Approve" only on runs where you're one. The classic `repo` scope already covers it. Bitbucket's API has no way to run a paused manual step, so mark those pipelines "waiting for a manual step" and let one key open them in the browser at that step.
 5. **Notification rules.** Notify only for chosen branches, set quiet hours, and flag a run as "broken by my commit" even when a merge or bot triggered it.
 6. **Client groups and build minutes.** Group repos by client across services with one health status per client. Show monthly build minutes per repo or client, for billing and spotting waste.
 
