@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use reqwest::header::{ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH, LINK, RETRY_AFTER, USER_AGENT};
+use reqwest::header::{ACCEPT, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH, LINK, RETRY_AFTER, USER_AGENT};
 use reqwest::{RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -234,8 +234,9 @@ impl Api {
         self.pacer.lock().await.budget(Instant::now())
     }
 
+    // Logs are plain text; Bitbucket answers 406 to the JSON Accept header the client sends by default.
     pub async fn get_text(&self, url: Url) -> Result<String> {
-        Ok(self.send(self.client.get(url)).await?.text().await?)
+        Ok(self.send(self.client.get(url).header(ACCEPT, "*/*")).await?.text().await?)
     }
 
     pub async fn post(&self, url: Url, body: Option<&Value>) -> Result<()> {
