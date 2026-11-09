@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LogTail, ProviderStatus, Run, Settings } from "./types";
+import type { Baseline, BuildTime, LogTail, PendingDeployment, ProviderStatus, Run, Settings } from "./types";
 
 export const api = {
   runs: () => invoke<Run[]>("get_runs"),
@@ -18,6 +18,15 @@ export const api = {
   setRepoFlag: (repoId: string, flag: "pinned" | "muted", on: boolean) =>
     invoke<void>("set_repo_flag", { repoId, flag, on }),
   setOnboarded: () => invoke<void>("set_onboarded"),
+  setNotifyRules: (branches: string, quietHours: string) => invoke<void>("set_notify_rules", { branches, quietHours }),
+  setAutoRerun: (on: boolean) => invoke<void>("set_auto_rerun", { on }),
+  watch: (key: string, on: boolean) => invoke<void>("watch_run", { key, on }),
+  setRepoClient: (repoId: string, client: string | null) => invoke<void>("set_repo_client", { repoId, client }),
+  buildTime: (month?: string) => invoke<BuildTime[]>("get_build_time", { month: month ?? null }),
+  pendingDeployments: (key: string) => invoke<PendingDeployment[]>("get_pending_deployments", { key }),
+  reviewDeployments: (key: string, approve: boolean) => invoke<void>("review_deployments", { key, approve }),
+  manualStepUrl: (key: string) => invoke<string>("manual_step_url", { key }),
+  baselineLog: (key: string, step: string) => invoke<Baseline | null>("get_baseline_log", { key, step }),
 };
 
 export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : String(e));

@@ -24,6 +24,11 @@ function run(repo: string, title: string, status: RunStatus, agoMin: number, ext
     startedAt: created,
     updatedAt: done,
     webUrl: "https://example.com",
+    author: "Grant",
+    buildSecs: status === "running" || status === "queued" ? null : 180,
+    flaky: false,
+    flakyWorkflow: false,
+    watched: false,
     ...extra,
   };
 }
@@ -31,13 +36,14 @@ function run(repo: string, title: string, status: RunStatus, agoMin: number, ext
 const runs: Run[] = [
   run("hatchd/web", "CI", "running", 2, { branch: "feature/cart" }),
   run("hatchd/api", "Deploy", "queued", 1),
-  run("hatchd/web", "CI", "failed", 20, { branch: "feature/login" }),
+  run("hatchd/web", "CI", "failed", 20, { branch: "feature/login", flakyWorkflow: true }),
   run("hatchd/web", "CI", "success", 40),
   run("hatchd/api", "Tests", "failed", 55, { branch: "fix/timeouts", subtitle: "Raise the DB pool size" }),
-  run("hatchd/api", "Tests", "success", 90),
+  run("hatchd/api", "Tests", "success", 90, { flaky: true }),
   run("hatchd/mobile", "Build", "success", 120, { provider: "bitbucket", key: "bitbucket:hatchd/mobile:{x}", subtitle: null }),
   run("hatchd/mobile", "Build", "cancelled", 300, { provider: "bitbucket", key: "bitbucket:hatchd/mobile:{y}", subtitle: null }),
-  run("hatchd/docs", "Pages", "waiting", 30, { actor: "sam", mine: false }),
+  run("hatchd/docs", "Pages", "waiting", 30, { actor: "sam", mine: false, title: "Deploy" }),
+  run("hatchd/web", "CI", "running", 4, { actor: "merge-bot", author: "Grant", branch: "main" }),
 ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
 const statuses: ProviderStatus[] = [
@@ -65,7 +71,18 @@ const statuses: ProviderStatus[] = [
   },
 ];
 
-const settings = { notifyAll: false, bitbucketEmail: null, pinned: ["github:hatchd/api"], muted: ["github:hatchd/docs"], onboarded: true, launchAtLogin: true };
+const settings = {
+  notifyAll: false,
+  bitbucketEmail: null,
+  pinned: ["github:hatchd/api"],
+  muted: ["github:hatchd/docs"],
+  onboarded: true,
+  launchAtLogin: true,
+  notifyBranches: "",
+  quietHours: "",
+  autoRerunFlaky: false,
+  clients: { "github:hatchd/web": "Hatchd", "github:hatchd/api": "Hatchd", "bitbucket:hatchd/mobile": "Acme" } as Record<string, string>,
+};
 const log = [
   "##[group]Run actions/checkout@v4",
   "with:",
@@ -100,6 +117,18 @@ const responses: Record<string, unknown> = {
   get_runs: runs,
   get_status: statuses,
   get_settings: settings,
+  get_pending_deployments: [{ environmentId: 1, environment: "production", canApprove: true, reviewers: ["grant", "sam"] }],
+  manual_step_url: "https://example.com/steps/1",
+  get_build_time: [
+    { repoId: "github:hatchd/web", secs: 7260, runs: 31 },
+    { repoId: "github:hatchd/api", secs: 3120, runs: 14 },
+    { repoId: "bitbucket:hatchd/mobile", secs: 5400, runs: 9 },
+  ],
+  get_baseline_log: {
+    run: { ...runs[runs.length - 1], number: 99, branch: "main", status: "success" },
+    log: { stepId: "2", step: "test", steps: [], skipped: 0, webUrl: "https://example.com",
+      text: log.split("\n").filter((l) => !/FAIL|login|Expected|Received|anonymous|failed|error/i.test(l)).join("\n") + "\nTests: 42 passed, 42 total" },
+  },
   get_log: {
     stepId: "2",
     step: "test",
@@ -128,7 +157,17 @@ export function install() {
         if (args.on && at < 0) list.push(id);
         if (!args.on && at >= 0) list.splice(at, 1);
       }
+      // Fresh copies, as a real backend would send, so React sees each change.
+      if (cmd === "get_runs") return runs.map((r) => ({ ...r }));
       if (cmd === "get_run") return runs.find((r) => r.key === args.key) ?? null;
+      if (cmd === "watch_run") {
+        const r = runs.find((x) => x.key === args.key);
+        if (r) r.watched = args.on as boolean;
+      }
+      if (cmd === "set_repo_client") {
+        if (args.client) settings.clients[args.repoId as string] = args.client as string;
+        else delete settings.clients[args.repoId as string];
+      }
       return responses[cmd] ?? null;
     },
   };

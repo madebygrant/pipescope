@@ -2,7 +2,7 @@
 
 Pipescope's job is to be the fastest way to find out what broke. Later it will hand that same information to coding agents. No built-in AI for now. Each feature should produce structured data, not just a screen, so the agent integration in phase 3 is mostly a wrapper around phases 1 and 2.
 
-## Phase 1: worth paying for without AI
+## Phase 1: worth paying for without AI [done 2026-11-09]
 
 1. **Compare with the last passing run.** Show only the log lines that are new compared with the last green run of the same workflow.
 2. **Flaky test detection.** Mark tests that failed and then passed on the same commit. Offer a one-key re-run, and optionally re-run them automatically.

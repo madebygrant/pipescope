@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
@@ -8,18 +8,78 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{AppState, tray};
 use crate::model::{Run, RunStatus};
+use crate::store::Store;
 
 #[derive(Debug, PartialEq)]
 pub enum Change {
     Failed(Run),
     Recovered(Run),
+    // A watched run finished. Sent whatever the notification rules say, since you asked for it.
+    Finished(Run),
 }
 
 impl Change {
     pub fn run(&self) -> &Run {
         match self {
-            Change::Failed(r) | Change::Recovered(r) => r,
+            Change::Failed(r) | Change::Recovered(r) | Change::Finished(r) => r,
         }
+    }
+}
+
+// Comma-separated branch patterns where `*` matches anything; empty allows every branch.
+pub fn branch_allowed(patterns: &str, branch: Option<&str>) -> bool {
+    let patterns: Vec<&str> = patterns.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
+    if patterns.is_empty() {
+        return true;
+    }
+    let Some(branch) = branch else { return false };
+    patterns.iter().any(|p| glob(p, branch))
+}
+
+fn glob(pattern: &str, text: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == text,
+        Some((head, rest)) => {
+            text.starts_with(head) && (0..=text.len() - head.len()).any(|i| text.is_char_boundary(head.len() + i) && glob(rest, &text[head.len() + i..]))
+        }
+    }
+}
+
+// "22:00-07:00" style, local time; the range may cross midnight.
+pub fn parse_quiet_hours(spec: &str) -> Option<(chrono::NaiveTime, chrono::NaiveTime)> {
+    let parse = |s: &str| chrono::NaiveTime::parse_from_str(s.trim(), "%H:%M").ok();
+    spec.split_once('-').and_then(|(a, b)| Some((parse(a)?, parse(b)?)))
+}
+
+pub fn in_quiet_hours(spec: &str, now: chrono::NaiveTime) -> bool {
+    let Some((start, end)) = parse_quiet_hours(spec) else { return false };
+    if start <= end { now >= start && now < end } else { now >= start || now < end }
+}
+
+// The settings that decide whether a run's failure or recovery is worth telling you about.
+pub struct Rules {
+    all: bool,
+    muted: HashSet<String>,
+    branches: String,
+    quiet_now: bool,
+}
+
+impl Rules {
+    pub fn load(store: &Store) -> Self {
+        let get = |k| store.setting(k).ok().flatten().unwrap_or_default();
+        Rules {
+            all: store.notify_all(),
+            muted: store.repo_flags("muted"),
+            branches: get("notify_branches"),
+            quiet_now: in_quiet_hours(&get("quiet_hours"), chrono::Local::now().time()),
+        }
+    }
+
+    pub fn wants(&self, run: &Run) -> bool {
+        (self.all || run.mine)
+            && !self.muted.contains(&run.repo_id())
+            && !self.quiet_now
+            && branch_allowed(&self.branches, run.branch.as_deref())
     }
 }
 
@@ -100,14 +160,9 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn send_all(app: &AppHandle, changes: Vec<Change>) {
     let state = app.state::<AppState>();
-    let (all, muted) = {
-        let store = state.store.lock().unwrap();
-        (store.notify_all(), store.repo_flags("muted"))
-    };
-    let wanted: Vec<Change> = changes
-        .into_iter()
-        .filter(|c| (all || c.run().mine) && !muted.contains(&c.run().repo_id()))
-        .collect();
+    let rules = Rules::load(&state.store.lock().unwrap());
+    let wanted: Vec<Change> =
+        changes.into_iter().filter(|c| matches!(c, Change::Finished(_)) || rules.wants(c.run())).collect();
     if wanted.is_empty() {
         return;
     }
@@ -121,8 +176,10 @@ pub fn send_all(app: &AppHandle, changes: Vec<Change>) {
         let state = app.state::<AppState>();
         state.notifier.flushing.store(false, Ordering::SeqCst);
         let batch = std::mem::take(&mut *state.notifier.queue.lock().unwrap());
-        let (failed, fixed): (Vec<_>, Vec<_>) = batch.into_iter().partition(|c| matches!(c, Change::Failed(_)));
-        for (title, body, target) in [message(&failed), message(&fixed)].into_iter().flatten() {
+        let (failed, rest): (Vec<_>, Vec<_>) = batch.into_iter().partition(|c| matches!(c, Change::Failed(_)));
+        let (fixed, finished): (Vec<_>, Vec<_>) = rest.into_iter().partition(|c| matches!(c, Change::Recovered(_)));
+        let messages = [message(&failed), message(&fixed)].into_iter().flatten().chain(finished.iter().map(finished_message));
+        for (title, body, target) in messages {
             let id = state.notifier.next.fetch_add(1, Ordering::Relaxed);
             let mut targets = state.notifier.targets.lock().unwrap();
             targets.insert(id, target);
@@ -136,7 +193,19 @@ pub fn send_all(app: &AppHandle, changes: Vec<Change>) {
     });
 }
 
-// `group` holds changes of one kind.
+fn finished_message(change: &Change) -> (String, String, Target) {
+    let run = change.run();
+    let outcome = match run.status {
+        RunStatus::Success => "passed",
+        RunStatus::Failed => "failed",
+        RunStatus::Cancelled => "was cancelled",
+        _ => "finished",
+    };
+    let branch = run.branch.as_deref().map(|b| format!(" on {b}")).unwrap_or_default();
+    (format!("Finished: {}", run.repo), format!("{} #{}{branch} {outcome}", run.title, run.number), Target::Run(run.key.clone()))
+}
+
+// `group` holds Failed or Recovered changes, not both.
 fn message(group: &[Change]) -> Option<(String, String, Target)> {
     match group {
         [] => None,
@@ -144,7 +213,7 @@ fn message(group: &[Change]) -> Option<(String, String, Target)> {
             let run = one.run();
             let (title, verb) = match one {
                 Change::Failed(_) => (format!("Failed: {}", run.repo), "failed"),
-                Change::Recovered(_) => (format!("Fixed: {}", run.repo), "passed again"),
+                _ => (format!("Fixed: {}", run.repo), "passed again"),
             };
             let branch = run.branch.as_deref().map(|b| format!(" on {b}")).unwrap_or_default();
             let actor = run.actor.as_deref().map(|a| format!(" ({a})")).unwrap_or_default();
@@ -194,7 +263,36 @@ mod tests {
             started_at: None,
             updated_at: t,
             web_url: String::new(),
+            author: None,
+            build_secs: None,
+            failed_before: false,
+            flaky: false,
+            flaky_workflow: false,
+            watched: false,
         }
+    }
+
+    #[test]
+    fn branch_patterns() {
+        assert!(branch_allowed("", None));
+        assert!(branch_allowed("main, release/*", Some("release/1.2")));
+        assert!(branch_allowed("main, release/*", Some("main")));
+        assert!(!branch_allowed("main, release/*", Some("feature/x")));
+        assert!(!branch_allowed("main", None));
+        assert!(branch_allowed("*-hotfix", Some("api-hotfix")));
+    }
+
+    #[test]
+    fn quiet_hours_cross_midnight() {
+        let at = |h, m| chrono::NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert!(in_quiet_hours("22:00-07:00", at(23, 30)));
+        assert!(in_quiet_hours("22:00-07:00", at(6, 59)));
+        assert!(!in_quiet_hours("22:00-07:00", at(7, 0)));
+        assert!(in_quiet_hours("12:00-13:00", at(12, 30)));
+        assert!(!in_quiet_hours("", at(12, 30)));
+        assert!(!in_quiet_hours("nonsense", at(12, 30)));
+        assert!(parse_quiet_hours("13:00-18:00").is_some());
+        assert!(parse_quiet_hours("1pm-6pm").is_none());
     }
 
     #[test]

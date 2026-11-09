@@ -3,7 +3,7 @@ pub mod github;
 
 use crate::error::{Error, Result};
 use crate::http::Fetched;
-use crate::model::{LogTail, ProviderKind, RateInfo, Repo, Run};
+use crate::model::{LogTail, PendingDeployment, ProviderKind, RateInfo, Repo, Run, StepPick};
 
 use bitbucket::Bitbucket;
 use github::GitHub;
@@ -86,10 +86,39 @@ impl Client {
         }
     }
 
-    pub async fn log_tail(&self, run: &Run, step: Option<&str>) -> Result<LogTail> {
+    pub async fn log_tail(&self, run: &Run, step: StepPick<'_>) -> Result<LogTail> {
         match self {
             Client::Github(c) => c.log_tail(run, step).await,
             Client::Bitbucket(c) => c.log_tail(run, step).await,
+        }
+    }
+
+    // Only GitHub needs asking; Bitbucket reports build seconds with each pipeline.
+    pub async fn build_secs(&self, run: &Run) -> Result<Option<u64>> {
+        match self {
+            Client::Github(c) => c.build_secs(run).await.map(Some),
+            Client::Bitbucket(_) => Ok(None),
+        }
+    }
+
+    pub async fn pending_deployments(&self, run: &Run) -> Result<Vec<PendingDeployment>> {
+        match self {
+            Client::Github(c) => c.pending_deployments(run).await,
+            Client::Bitbucket(_) => Ok(Vec::new()),
+        }
+    }
+
+    pub async fn review_deployments(&self, run: &Run, environment_ids: &[u64], approve: bool) -> Result<()> {
+        match self {
+            Client::Github(c) => c.review_deployments(run, environment_ids, approve).await,
+            Client::Bitbucket(_) => Err(Error::Other("Bitbucket has no deployment approvals.".into())),
+        }
+    }
+
+    pub async fn manual_step_url(&self, run: &Run) -> Result<String> {
+        match self {
+            Client::Bitbucket(c) => c.manual_step_url(run).await,
+            Client::Github(_) => Ok(run.web_url.clone()),
         }
     }
 }

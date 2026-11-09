@@ -11,9 +11,10 @@ use tokio::time::{Instant, sleep_until};
 
 use crate::error::{Error, Result};
 use crate::http::Fetched;
-use crate::model::{ConnState, ProviderKind, Repo};
+use crate::model::{ConnState, ProviderKind, Repo, Run};
+use crate::notify::Change;
 use crate::providers::Client;
-use crate::{AppState, notify, set_status_quiet, tray, update_status};
+use crate::{AppState, flaky, notify, set_status_quiet, tray, update_status};
 
 const REPO_LIST_EVERY: Duration = Duration::from_secs(30 * 60);
 const RETRY_AFTER_ERROR: Duration = Duration::from_secs(60);
@@ -183,7 +184,12 @@ async fn poll(app: &AppHandle, client: &Client, tracked: &mut Tracked) -> Result
         let state = app.state::<AppState>();
         let changes = state.store.lock().unwrap().apply_poll(kind, &tracked.repo.full_name, &runs);
         match changes {
-            Ok(changes) => notify::send_all(app, changes),
+            Ok(changes) => {
+                let changes = finish_watched(app, &runs, changes);
+                let changes = auto_rerun(app, client, &tracked.repo.full_name, changes).await;
+                notify::send_all(app, changes);
+                time_finished(app, client, &runs).await;
+            }
             Err(e) => eprintln!("saving runs for {} failed: {e}", tracked.repo.full_name),
         }
         let _ = app.emit("runs-updated", ());
@@ -191,6 +197,102 @@ async fn poll(app: &AppHandle, client: &Client, tracked: &mut Tracked) -> Result
     }
     tracked.next_due = Instant::now() + interval(kind, tracked.tier());
     Ok(())
+}
+
+// A finished watched run gets one "Finished" notice in place of any other, then stops being watched.
+fn finish_watched(app: &AppHandle, runs: &[Run], mut changes: Vec<Change>) -> Vec<Change> {
+    let state = app.state::<AppState>();
+    let store = state.store.lock().unwrap();
+    let watched = store.repo_flags("watched");
+    for run in runs.iter().filter(|r| r.is_finished() && watched.contains(&r.key)) {
+        changes.retain(|c| c.run().key != run.key);
+        changes.push(Change::Finished(run.clone()));
+        if let Err(e) = store.set_repo_flag("watched", &run.key, false) {
+            eprintln!("unwatching {} failed: {e}", run.key);
+        }
+    }
+    changes
+}
+
+// Re-runs first failures of workflows that recently passed on retry, when the setting is on,
+// and holds back their failure notice: a retry that fails again notifies as usual.
+async fn auto_rerun(app: &AppHandle, client: &Client, repo: &str, changes: Vec<Change>) -> Vec<Change> {
+    let state = app.state::<AppState>();
+    let (history, rules) = {
+        let store = state.store.lock().unwrap();
+        if store.setting("auto_rerun_flaky").ok().flatten().as_deref() != Some("1") {
+            return changes;
+        }
+        let rules = notify::Rules::load(&store);
+        match store.repo_runs(client.kind(), repo) {
+            Ok(h) if changes.iter().any(|c| matches!(c, Change::Failed(r) if rules.wants(r))) => (h, rules),
+            _ => return changes,
+        }
+    };
+    let mut kept = Vec::new();
+    for change in changes {
+        let Change::Failed(run) = &change else {
+            kept.push(change);
+            continue;
+        };
+        // The stored copy carries `failed_before`, which the fresh one doesn't.
+        let stored = history.iter().find(|r| r.key == run.key).unwrap_or(run);
+        if !rules.wants(run) || !flaky::should_auto_rerun(&history, stored) {
+            kept.push(change);
+            continue;
+        }
+        match client.rerun(run, true).await {
+            Ok(()) => {
+                eprintln!("re-running flaky {} #{} in {repo}", run.title, run.number);
+                after_rerun(app, run);
+            }
+            Err(e) => {
+                eprintln!("automatic re-run of {} failed: {e}", run.key);
+                kept.push(change);
+            }
+        }
+    }
+    kept
+}
+
+// Polls straight away so the retry shows, and for GitHub marks the run queued so a fast
+// second failure is still seen as a change.
+pub fn after_rerun(app: &AppHandle, run: &Run) {
+    let state = app.state::<AppState>();
+    if run.provider == ProviderKind::Github
+        && let Err(e) = state.store.lock().unwrap().mark_rerun(&run.key)
+    {
+        eprintln!("marking {} re-run failed: {e}", run.key);
+    }
+    state.scheduler.send(run.provider, Control::PollRepo(run.repo.clone()));
+}
+
+// Only runs that finished recently, so a first sweep doesn't spend an API call on every old run.
+const TIME_RUNS_FINISHED_WITHIN: chrono::TimeDelta = chrono::TimeDelta::hours(6);
+
+async fn time_finished(app: &AppHandle, client: &Client, runs: &[Run]) {
+    if client.kind() != ProviderKind::Github {
+        return;
+    }
+    let cutoff = Utc::now() - TIME_RUNS_FINISHED_WITHIN;
+    let state = app.state::<AppState>();
+    let due: Vec<&Run> = {
+        let store = state.store.lock().unwrap();
+        runs.iter()
+            .filter(|r| r.is_finished() && r.updated_at > cutoff && store.needs_build_time(r).unwrap_or(false))
+            .collect()
+    };
+    for run in due {
+        match client.build_secs(run).await {
+            Ok(Some(secs)) => {
+                if let Err(e) = state.store.lock().unwrap().set_build_time(run, secs) {
+                    eprintln!("saving build time for {} failed: {e}", run.key);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("timing {} failed: {e}", run.key),
+        }
+    }
 }
 
 // Only transitions emit, so a long outage doesn't spam the UI.

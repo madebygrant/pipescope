@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorContext, isErrorLine, parseLog } from "./model";
+import { contextRows, errorContext, formatSecs, isErrorLine, newLines, normaliseLine, parseLog } from "./model";
 
 describe("isErrorLine", () => {
   it("flags failures", () => {
@@ -49,5 +49,31 @@ describe("errorContext", () => {
 
   it("merges overlapping windows", () => {
     expect(errorContext(lines, 6)).toEqual([...Array(20).keys()]);
+  });
+});
+
+describe("comparing with the last pass", () => {
+  it("ignores timings, ids and hashes", () => {
+    expect(normaliseLine("Done in 14.2s (build 7f3a9c1e)")).toBe(normaliseLine("Done in 9.8s (build 0b12ffe9)"));
+    expect(normaliseLine("FAIL src/login.test.ts")).not.toBe(normaliseLine("PASS src/login.test.ts"));
+  });
+
+  it("finds lines the passing run didn't have", () => {
+    const failing = parseLog(["npm test", "Done in 12s", "", "FAIL src/login.test.ts", "Tests: 1 failed"].join("\n")).lines;
+    const passing = parseLog(["npm test", "Done in 9s", "", "Tests: 42 passed"].join("\n")).lines;
+    expect([...newLines(failing, passing)]).toEqual([3, 4]);
+    expect(contextRows(failing, (_, i) => i === 3, 1)).toEqual([2, 3, 4]);
+  });
+
+  it("leaves lines before a truncated pass's log unmarked", () => {
+    const failing = parseLog(["checkout", "install", "npm test", "FAIL x"].join("\n")).lines;
+    const passingTail = parseLog(["npm test", "Tests: 42 passed"].join("\n")).lines;
+    expect([...newLines(failing, passingTail, true)]).toEqual([3]);
+    expect([...newLines(failing, passingTail, false)]).toEqual([0, 1, 3]);
+  });
+
+  it("formats build time", () => {
+    expect(formatSecs(90)).toBe("2m");
+    expect(formatSecs(7260)).toBe("2h 1m");
   });
 });

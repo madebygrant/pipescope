@@ -31,6 +31,10 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
   const [notifyAll, setNotifyAll] = useState(false);
   const [muted, setMuted] = useState<string[]>([]);
   const [launchAtLogin, setLaunchAtLogin] = useState<boolean | null>(null);
+  const [branches, setBranches] = useState("");
+  const [quietHours, setQuietHours] = useState("");
+  const [rulesSaved, setRulesSaved] = useState(true);
+  const [autoRerun, setAutoRerun] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +43,9 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
       setNotifyAll(s.notifyAll);
       setBbEmail(s.bitbucketEmail ?? "");
       setMuted(s.muted);
+      setBranches(s.notifyBranches);
+      setQuietHours(s.quietHours);
+      setAutoRerun(s.autoRerunFlaky);
       // On first run, offer it ticked; it only takes effect on "Get started".
       setLaunchAtLogin(s.launchAtLogin === null ? null : welcome ? true : s.launchAtLogin);
     });
@@ -153,6 +160,70 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
             />
             Notify and colour the tray icon for everyone's runs, not just mine
           </label>
+          <label className="field">
+            <span>Only notify for these branches</span>
+            <input
+              type="text"
+              placeholder="All branches, or e.g. main, release/*"
+              value={branches}
+              onChange={(e) => {
+                setBranches(e.target.value);
+                setRulesSaved(false);
+              }}
+            />
+          </label>
+          <label className="field">
+            <span>Quiet hours</span>
+            <input
+              type="text"
+              placeholder="e.g. 22:00-07:00"
+              value={quietHours}
+              onChange={(e) => {
+                setQuietHours(e.target.value);
+                setRulesSaved(false);
+              }}
+            />
+          </label>
+          <p className="hint">
+            Runs you're watching always notify when they finish, whatever these say. A run counts as yours when you
+            started it or it's your commit.
+          </p>
+          <div className="row">
+            <button
+              disabled={!!busy || rulesSaved}
+              onClick={() =>
+                run("rules", async () => {
+                  await api.setNotifyRules(branches, quietHours);
+                  setRulesSaved(true);
+                })
+              }
+            >
+              {rulesSaved ? "Saved" : "Save rules"}
+            </button>
+          </div>
+        </section>
+
+        <section>
+          <h3>Flaky workflows</h3>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={autoRerun}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setAutoRerun(on);
+                api.setAutoRerun(on).catch((err) => {
+                  setAutoRerun(!on);
+                  setError(errorText(err));
+                });
+              }}
+            />
+            Re-run a failed workflow once automatically if it has recently passed on retry
+          </label>
+          <p className="hint">
+            Only for runs you'd be notified about. You're only told about the failure if the re-run fails too. Uses
+            build minutes.
+          </p>
         </section>
         <section>
           <h3>Startup</h3>

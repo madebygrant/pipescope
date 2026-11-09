@@ -119,3 +119,23 @@ export const IconWarning = () => (
     <path d="M8 6.8v2.6M8 11.4v.1" />
   </svg>
 );
+export const IconEye = () => (
+  <svg {...ui} width={12} height={12}>
+    <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" />
+    <circle cx="8" cy="8" r="1.8" />
+  </svg>
+);
+export const IconClients = () => (
+  <svg {...ui}>
+    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
+  </svg>
+);
+export const IconTag = () => (
+  <svg {...ui} width={13} height={13}>
+    <path d="M2.5 2.5h5l6 6-5 5-6-6z" />
+    <circle cx="5.3" cy="5.3" r="0.9" />
+  </svg>
+);

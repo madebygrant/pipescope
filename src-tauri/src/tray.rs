@@ -298,6 +298,12 @@ mod tests {
             started_at: None,
             updated_at: t,
             web_url: String::new(),
+            author: None,
+            build_secs: None,
+            failed_before: false,
+            flaky: false,
+            flaky_workflow: false,
+            watched: false,
         }
     }
 

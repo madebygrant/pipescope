@@ -3,15 +3,17 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, label } from "./api";
-import type { ProviderStatus, Run, Settings } from "./types";
+import type { PendingDeployment, ProviderStatus, Run, Settings } from "./types";
 import type { Pending, StateFilter } from "./model";
 import { ago, buildSections, isActive, settled, visibleOrder } from "./model";
 import { RunRow } from "./RunRow";
+import type { Confirm } from "./RunRow";
+import { ClientsView } from "./ClientsView";
 import { SettingsView } from "./SettingsView";
 import { LogView } from "./LogView";
-import { IconGear, IconMute, IconPin, IconRefresh, IconSearch } from "./icons";
+import { IconClients, IconGear, IconMute, IconPin, IconRefresh, IconSearch, IconTag } from "./icons";
 
-type View = { kind: "list" } | { kind: "settings" } | { kind: "log"; run: Run };
+type View = { kind: "list" } | { kind: "settings" } | { kind: "clients" } | { kind: "log"; run: Run };
 
 function loadMineOnly() {
   try {
@@ -30,7 +32,9 @@ export default function App() {
   const [filter, setFilter] = useState<StateFilter>("all");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, Pending>>({});
-  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ key: string; action: Confirm } | null>(null);
+  const [deployments, setDeployments] = useState<Record<string, PendingDeployment[]>>({});
+  const [editingClient, setEditingClient] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -148,10 +152,52 @@ export default function App() {
     }
   };
   const rerun = (run: Run, failedOnly: boolean) => track(run, "rerun", () => api.rerun(run.key, failedOnly));
-  const cancel = (run: Run) => {
-    setConfirmKey(null);
-    track(run, "cancel", () => api.cancel(run.key));
+  const confirmAction = (run: Run, action: Confirm) => {
+    setConfirm(null);
+    if (action === "cancel") {
+      track(run, "cancel", () => api.cancel(run.key));
+      return;
+    }
+    track(run, "review", async () => {
+      await api.reviewDeployments(run.key, action === "approve");
+      setDeployments(({ [run.key]: _, ...rest }) => rest);
+    });
   };
+  const toggleWatch = (run: Run) =>
+    act(async () => {
+      await api.watch(run.key, !run.watched);
+      await loadRuns();
+    });
+  const openStep = (run: Run) =>
+    act(async () => {
+      await openUrl(await api.manualStepUrl(run.key));
+    });
+  const setClient = (id: string, client: string) =>
+    act(async () => {
+      setEditingClient(null);
+      await api.setRepoClient(id, client.trim() || null);
+      await loadSettings();
+    });
+
+  // Who can approve is only known by asking, so look it up when a waiting GitHub run is selected.
+  useEffect(() => {
+    if (!selected || selected.status !== "waiting" || selected.provider !== "github" || selected.key in deployments) return;
+    const key = selected.key;
+    api
+      .pendingDeployments(key)
+      .then((d) => setDeployments((all) => ({ ...all, [key]: d })))
+      .catch(() => setDeployments((all) => ({ ...all, [key]: [] })));
+  }, [selected, deployments]);
+
+  // Drop lookups for runs that have moved on, so a later wait is looked up afresh.
+  useEffect(() => {
+    setDeployments((all) => {
+      const keep = Object.fromEntries(
+        Object.entries(all).filter(([key]) => runs.some((r) => r.key === key && r.status === "waiting")),
+      );
+      return Object.keys(keep).length === Object.keys(all).length ? all : keep;
+    });
+  }, [runs]);
   const canRerun = (run: Run) => !isActive(run) && run.status !== "waiting" && !pending[run.key];
 
   useEffect(() => {
@@ -167,17 +213,17 @@ export default function App() {
         const i = selected ? order.indexOf(selected) : -1;
         const next = e.key === "ArrowDown" ? Math.min(i + 1, order.length - 1) : Math.max(i - 1, 0);
         setSelectedKey(order[next].key);
-        setConfirmKey(null);
+        setConfirm(null);
       } else if (e.key === "Enter") {
         // Leave Enter alone on buttons and other controls so they still activate normally.
         const target = e.target as HTMLElement;
         if (target !== searchRef.current && target !== document.body) return;
         e.preventDefault();
-        if (selected && confirmKey === selected.key) cancel(selected);
+        if (selected && confirm?.key === selected.key) confirmAction(selected, confirm.action);
         else if (selected) openUrl(selected.webUrl);
       } else if (e.key === "Escape") {
         e.preventDefault();
-        if (confirmKey) setConfirmKey(null);
+        if (confirm) setConfirm(null);
         else if (query) setQuery("");
         else getCurrentWindow().hide();
       } else if (mod && e.key.toLowerCase() === "r") {
@@ -192,7 +238,10 @@ export default function App() {
         if (selected) setView({ kind: "log", run: selected });
       } else if (mod && e.key === ".") {
         e.preventDefault();
-        if (selected && isActive(selected) && !pending[selected.key]) setConfirmKey(selected.key);
+        if (selected && isActive(selected) && !pending[selected.key]) setConfirm({ key: selected.key, action: "cancel" });
+      } else if (mod && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        if (selected && (isActive(selected) || selected.status === "waiting")) toggleWatch(selected);
       } else if (mod && e.key === ",") {
         e.preventDefault();
         setView({ kind: "settings" });
@@ -225,6 +274,9 @@ export default function App() {
       />
     );
   }
+  if (view.kind === "clients") {
+    return <ClientsView runs={runs} settings={settings} onBack={() => setView({ kind: "list" })} />;
+  }
   if (view.kind === "log") {
     // Look the run up again so the log view sees status changes and knows when to stop tailing.
     const run = runs.find((r) => r.key === view.run.key) ?? view.run;
@@ -251,14 +303,17 @@ export default function App() {
       showRepo={showRepo}
       selected={selected?.key === run.key}
       pending={pending[run.key]}
-      confirming={confirmKey === run.key}
+      confirming={confirm?.key === run.key ? confirm.action : null}
+      deployments={deployments[run.key]}
       onSelect={() => setSelectedKey(run.key)}
       onOpen={() => openUrl(run.webUrl)}
       onLog={() => setView({ kind: "log", run })}
       onRerun={(failedOnly) => rerun(run, failedOnly)}
-      onCancel={() => setConfirmKey(run.key)}
-      onConfirmCancel={() => cancel(run)}
-      onKeepRunning={() => setConfirmKey(null)}
+      onAsk={(action) => setConfirm({ key: run.key, action })}
+      onConfirm={() => confirm && confirmAction(run, confirm.action)}
+      onDismiss={() => setConfirm(null)}
+      onWatch={() => toggleWatch(run)}
+      onOpenStep={() => openStep(run)}
     />
   );
 
@@ -290,6 +345,9 @@ export default function App() {
         </div>
         <button className="icon" title="Refresh" aria-label="Refresh" onClick={() => act(api.refresh)}>
           <IconRefresh />
+        </button>
+        <button className="icon" title="Clients" aria-label="Clients" onClick={() => setView({ kind: "clients" })}>
+          <IconClients />
         </button>
         <button className="icon" title="Settings (⌘,)" aria-label="Settings" onClick={() => setView({ kind: "settings" })}>
           <IconGear />
@@ -375,7 +433,39 @@ export default function App() {
               <h2>
                 <span className={`provider ${g.provider}`}>{g.provider === "github" ? "GH" : "BB"}</span>
                 <span className="repo-name">{g.repo}</span>
+                {editingClient === g.id ? (
+                  <input
+                    className="client-input"
+                    autoFocus
+                    list="client-names"
+                    defaultValue={settings?.clients[g.id] ?? ""}
+                    placeholder="Client"
+                    aria-label={`Client for ${g.repo}`}
+                    // Marked done so the blur that follows unmounting doesn't save a second time.
+                    onKeyDown={(e) => {
+                      const input = e.currentTarget;
+                      if (e.key === "Enter") {
+                        input.dataset.done = "1";
+                        setClient(g.id, input.value);
+                      } else if (e.key === "Escape") {
+                        e.stopPropagation();
+                        input.dataset.done = "1";
+                        setEditingClient(null);
+                      }
+                    }}
+                    onBlur={(e) => !e.currentTarget.dataset.done && setClient(g.id, e.currentTarget.value)}
+                  />
+                ) : (
+                  settings?.clients[g.id] && <span className="client-chip">{settings.clients[g.id]}</span>
+                )}
                 <span className="repo-tools">
+                  <button
+                    title="Set the client"
+                    aria-label={`Set the client for ${g.repo}`}
+                    onClick={() => setEditingClient(g.id)}
+                  >
+                    <IconTag />
+                  </button>
                   <button
                     className={g.pinned ? "on" : ""}
                     title={g.pinned ? "Unpin" : "Pin to top"}
@@ -406,13 +496,18 @@ export default function App() {
         )}
       </main>
 
+      <datalist id="client-names">
+        {[...new Set(Object.values(settings?.clients ?? {}))].map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
       <footer className="hints" aria-hidden>
         {[
           ["↑↓", "select"],
           ["↵", "open"],
           ["⌘L", "log"],
           ["⌘R", "re-run"],
-          ["⌘.", "cancel"],
+          ["⌘D", "watch"],
           ["esc", "close"],
         ].map(([key, what]) => (
           <span key={key}>

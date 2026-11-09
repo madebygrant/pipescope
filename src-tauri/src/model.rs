@@ -37,6 +37,10 @@ impl RunStatus {
         matches!(self, RunStatus::Queued | RunStatus::Running)
     }
 
+    pub fn is_finished(self) -> bool {
+        matches!(self, RunStatus::Success | RunStatus::Failed | RunStatus::Cancelled | RunStatus::Skipped)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             RunStatus::Queued => "queued",
@@ -90,6 +94,23 @@ pub struct Run {
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub web_url: String,
+    // Commit author's name, when the provider reports it.
+    #[serde(default)]
+    pub author: Option<String>,
+    // Bitbucket's billed seconds. GitHub runs leave it empty; the scheduler sums their job times.
+    #[serde(default)]
+    pub build_secs: Option<u64>,
+    // Carried across polls by the store: this run has been seen failing, so a pass
+    // after a GitHub re-run of the same run counts as flaky.
+    #[serde(default)]
+    pub failed_before: bool,
+    // The fields below are worked out when runs are read, never stored.
+    #[serde(default)]
+    pub flaky: bool,
+    #[serde(default)]
+    pub flaky_workflow: bool,
+    #[serde(default)]
+    pub watched: bool,
 }
 
 impl Run {
@@ -97,6 +118,29 @@ impl Run {
     pub fn repo_id(&self) -> String {
         format!("{}:{}", self.provider.as_str(), self.repo)
     }
+
+    pub fn is_finished(&self) -> bool {
+        self.status.is_finished()
+    }
+}
+
+// How a log request chooses its job or step.
+#[derive(Clone, Copy, Debug)]
+pub enum StepPick<'a> {
+    // The failing or running one.
+    Auto,
+    Id(&'a str),
+    // Matching by name lets a log be compared with another run's.
+    Name(&'a str),
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDeployment {
+    pub environment_id: u64,
+    pub environment: String,
+    pub can_approve: bool,
+    pub reviewers: Vec<String>,
 }
 
 pub fn run_key(provider: ProviderKind, repo: &str, id: &str) -> String {

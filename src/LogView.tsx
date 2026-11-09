@@ -4,9 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./api";
-import type { LogTail, Run } from "./types";
+import type { Baseline, LogTail, Run } from "./types";
 import type { LogLine } from "./model";
-import { errorContext, isActive, parseLog } from "./model";
+import { ago, contextRows, errorContext, isActive, newLines, parseLog } from "./model";
 import { IconBack, IconChevron, IconCopy, IconExpand, IconExternal, IconSearch, IconWrap, StatusIcon } from "./icons";
 
 // GitHub only serves a job's log once it finishes, so its refresh just watches for that.
@@ -50,7 +50,9 @@ export function LogView({ run, onBack, initialStep }: Props) {
   const [copied, setCopied] = useState(false);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
-  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [mode, setMode] = useState<"all" | "errors" | "changes">("all");
+  // Keyed by step name: the comparison is with the same step in the last passing run.
+  const [baseline, setBaseline] = useState<{ step: string; data: Baseline | null; error?: string } | null>(null);
   const [wrap, setWrap] = useState(loadWrap);
   const [toggled, setToggled] = useState<Set<number>>(new Set());
   const lineRefs = useRef(new Map<number, HTMLDivElement>());
@@ -66,6 +68,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
     setLog(null);
     setError(null);
     setToggled(new Set());
+    setBaseline(null);
     positioned.current = null;
     let stop = false;
     fetchLog.current = () =>
@@ -106,7 +109,8 @@ export function LogView({ run, onBack, initialStep }: Props) {
 
   // Groups start collapsed unless they hold an error; a click flips that default.
   const isOpen = (id: number) => groups[id].hasError !== toggled.has(id);
-  const hidden = (l: LogLine) => l.group !== null && !q && !errorsOnly && !isOpen(l.group);
+  const filtered = mode !== "all";
+  const hidden = (l: LogLine) => l.group !== null && !q && !filtered && !isOpen(l.group);
 
   const targets = useMemo(() => {
     const want = q ? (l: LogLine) => l.text.toLowerCase().includes(q.toLowerCase()) : (l: LogLine) => l.kind === "error";
@@ -117,11 +121,33 @@ export function LogView({ run, onBack, initialStep }: Props) {
 
   useEffect(() => setCursor(0), [q]);
   useEffect(() => {
-    if (!errorCount) setErrorsOnly(false);
-  }, [errorCount]);
+    if (!errorCount && mode === "errors") setMode("all");
+  }, [errorCount, mode]);
+
+  const stepName = log?.step ?? "";
+  const loadingBaseline = mode === "changes" && !!log && baseline?.step !== stepName;
+  useEffect(() => {
+    if (!loadingBaseline) return;
+    let stop = false;
+    api
+      .baselineLog(run.key, stepName)
+      .then((data) => !stop && setBaseline({ step: stepName, data }))
+      .catch((e) => !stop && setBaseline({ step: stepName, data: null, error: errorText(e) }));
+    return () => {
+      stop = true;
+    };
+  }, [loadingBaseline, run.key, stepName]);
+
+  const baseLog = baseline?.step === stepName && baseline.data?.log.stepId ? baseline.data.log : null;
+  const changed = useMemo(
+    () => (baseLog ? newLines(lines, parseLog(baseLog.text).lines, baseLog.skipped > 0) : null),
+    [lines, baseLog],
+  );
+  // Marker lines like ##[group] aren't in `lines`, so positions there and log line numbers differ.
+  const changedN = useMemo(() => new Set([...(changed ?? [])].map((i) => lines[i].n)), [changed, lines]);
 
   const reveal = (n: number) => {
-    const line = lines[n - 1];
+    const line = lines.find((l) => l.n === n);
     if (line && line.group !== null && !isOpen(line.group)) {
       setToggled((t) => new Set(t).add(line.group!));
     }
@@ -170,7 +196,10 @@ export function LogView({ run, onBack, initialStep }: Props) {
         findRef.current?.select();
       } else if (key === "e") {
         e.preventDefault();
-        if (errorCount) setErrorsOnly((v) => !v);
+        if (errorCount) setMode((m) => (m === "errors" ? "all" : "errors"));
+      } else if (key === "j") {
+        e.preventDefault();
+        if (log) setMode((m) => (m === "changes" ? "all" : "changes"));
       }
     };
     window.addEventListener("keydown", onKey);
@@ -191,9 +220,16 @@ export function LogView({ run, onBack, initialStep }: Props) {
     });
   };
 
-  const rows = errorsOnly ? errorContext(lines) : lines.map((_, i) => i);
+  const rows =
+    mode === "errors"
+      ? errorContext(lines)
+      : mode === "changes"
+        ? changed
+          ? contextRows(lines, (_, i) => changed.has(i))
+          : []
+        : lines.map((_, i) => i);
   const copyText = () =>
-    errorsOnly ? rows.map((i) => (i === null ? "…" : lines[i].text)).join("\n") : lines.map((l) => l.text).join("\n");
+    filtered ? rows.map((i) => (i === null ? "…" : lines[i].text)).join("\n") : lines.map((l) => l.text).join("\n");
 
   const copy = async () => {
     const text = copyText();
@@ -209,6 +245,26 @@ export function LogView({ run, onBack, initialStep }: Props) {
     }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  const compareNote = () => {
+    if (loadingBaseline) return "Finding the last passing run…";
+    if (baseline?.error) return `Couldn't load the last passing run: ${baseline.error}`;
+    const base = baseline?.data;
+    if (!base) return `No earlier passing run of ${run.title} to compare with.`;
+    const which = (
+      <button className="link" onClick={() => openUrl(base.log.webUrl || base.run.webUrl)}>
+        #{base.run.number}
+        {base.run.branch ? ` on ${base.run.branch}` : ""}
+      </button>
+    );
+    if (!baseLog) return <>The last pass, {which}, has no step called “{stepName}”.</>;
+    const n = changed?.size ?? 0;
+    return (
+      <>
+        {n} new {n === 1 ? "line" : "lines"} compared with {which}, which passed {ago(base.run.updatedAt, Date.now())}
+      </>
+    );
   };
 
   const groupHeader = (l: LogLine) => {
@@ -240,7 +296,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
         if (el) lineRefs.current.set(l.n, el);
         else lineRefs.current.delete(l.n);
       }}
-      className={`log-line ${l.kind}${l.n === current ? " current" : ""}${l.group !== null ? " grouped" : ""}`}
+      className={`log-line ${l.kind}${l.n === current ? " current" : ""}${l.group !== null ? " grouped" : ""}${changedN.has(l.n) ? " new" : ""}`}
     >
       <span className="ln">{l.n + (log?.skipped ?? 0)}</span>
       <span className="lt">{highlight(l.text, q)}</span>
@@ -331,13 +387,22 @@ export function LogView({ run, onBack, initialStep }: Props) {
           {navLabel && <span className="find-count">{navLabel}</span>}
         </label>
         <button
-          className={`tool${errorsOnly ? " on" : ""}`}
-          onClick={() => setErrorsOnly((v) => !v)}
+          className={`tool${mode === "errors" ? " on" : ""}`}
+          onClick={() => setMode((m) => (m === "errors" ? "all" : "errors"))}
           disabled={!errorCount}
           title="Show only errors and the lines around them (⌘E)"
-          aria-pressed={errorsOnly}
+          aria-pressed={mode === "errors"}
         >
-          Errors only
+          Errors
+        </button>
+        <button
+          className={`tool${mode === "changes" ? " on" : ""}`}
+          onClick={() => setMode((m) => (m === "changes" ? "all" : "changes"))}
+          disabled={!log}
+          title="Show only lines that weren't in the last passing run (⌘J)"
+          aria-pressed={mode === "changes"}
+        >
+          Changes
         </button>
         <button className={`tool icon-only${wrap ? " on" : ""}`} onClick={toggleWrap} title="Wrap long lines" aria-pressed={wrap}>
           <IconWrap />
@@ -346,13 +411,14 @@ export function LogView({ run, onBack, initialStep }: Props) {
           className="tool icon-only"
           onClick={copy}
           disabled={!log}
-          title={copied ? "Copied" : errorsOnly ? "Copy the errors" : "Copy the log"}
-          aria-label={copied ? "Copied" : errorsOnly ? "Copy the errors" : "Copy the log"}
+          title={copied ? "Copied" : filtered ? "Copy what's shown" : "Copy the log"}
+          aria-label={copied ? "Copied" : filtered ? "Copy what's shown" : "Copy the log"}
         >
           {copied ? "✓" : <IconCopy />}
         </button>
       </div>
 
+      {mode === "changes" && log && <div className="compare-note">{compareNote()}</div>}
       {error && <div className="banner error">{error}</div>}
       {expandError && <div className="banner error">{expandError}</div>}
       {!log && !error && (
@@ -364,7 +430,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
       )}
       {log && (
         <div className={`log${wrap ? " wrap" : ""}`} ref={bodyRef}>
-          {log.skipped > 0 && !errorsOnly && (
+          {log.skipped > 0 && !filtered && (
             <button className="log-skipped" onClick={() => openUrl(log.webUrl)}>
               {log.skipped.toLocaleString()} earlier lines not shown · Open the full log <IconExternal />
             </button>
@@ -379,7 +445,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
               );
             }
             const l = lines[i];
-            const startsGroup = !errorsOnly && !q && l.group !== null && (i === 0 || lines[i - 1].group !== l.group);
+            const startsGroup = !filtered && !q && l.group !== null && (i === 0 || lines[i - 1].group !== l.group);
             if (hidden(l)) return startsGroup ? groupHeader(l) : null;
             return (
               <Fragment key={l.n}>

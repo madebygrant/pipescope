@@ -18,6 +18,13 @@ export interface Run {
   startedAt: string | null;
   updatedAt: string;
   webUrl: string;
+  author: string | null;
+  buildSecs: number | null;
+  // Passed after failing on the same commit.
+  flaky: boolean;
+  // A failure of a workflow that has recently passed on retry.
+  flakyWorkflow: boolean;
+  watched: boolean;
 }
 
 export interface RateInfo {
@@ -46,6 +53,29 @@ export interface Settings {
   onboarded: boolean;
   // Null in dev builds, where it can't be set.
   launchAtLogin: boolean | null;
+  notifyBranches: string;
+  quietHours: string;
+  autoRerunFlaky: boolean;
+  // repoId → client name.
+  clients: Record<string, string>;
+}
+
+export interface PendingDeployment {
+  environmentId: number;
+  environment: string;
+  canApprove: boolean;
+  reviewers: string[];
+}
+
+export interface Baseline {
+  run: Run;
+  log: LogTail;
+}
+
+export interface BuildTime {
+  repoId: string;
+  secs: number;
+  runs: number;
 }
 
 export interface LogStep {

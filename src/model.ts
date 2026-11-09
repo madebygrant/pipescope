@@ -4,7 +4,7 @@ import { repoId } from "./types";
 export type StateFilter = "all" | "failing" | "running";
 
 export interface Pending {
-  kind: "rerun" | "cancel";
+  kind: "rerun" | "cancel" | "review";
   at: number;
   run: Run;
 }
@@ -96,6 +96,10 @@ export function visibleOrder(s: Sections, filter: StateFilter): Run[] {
 
 export function settled(p: Pending, runs: Run[], now: number) {
   if (now - p.at > (p.kind === "rerun" ? 120_000 : 60_000)) return true;
+  if (p.kind === "review") {
+    const current = runs.find((r) => r.key === p.run.key);
+    return !current || current.status !== "waiting";
+  }
   if (p.kind === "cancel") {
     const current = runs.find((r) => r.key === p.run.key);
     return !current || !isActive(current);
@@ -204,12 +208,12 @@ export function parseLog(text: string): ParsedLog {
   return { lines, groups };
 }
 
-// Indices into `lines` for the errors-only view: each error with `context` lines either side,
-// and null where lines were skipped.
-export function errorContext(lines: LogLine[], context = 2): (number | null)[] {
+// Indices into `lines` for a filtered view: each line `want` picks with `context` lines
+// either side, and null where lines were skipped.
+export function contextRows(lines: LogLine[], want: (l: LogLine, i: number) => boolean, context = 2): (number | null)[] {
   const keep = new Set<number>();
   lines.forEach((l, i) => {
-    if (l.kind !== "error") return;
+    if (!want(l, i)) return;
     for (let j = Math.max(0, i - context); j <= Math.min(lines.length - 1, i + context); j++) keep.add(j);
   });
   const out: (number | null)[] = [];
@@ -220,4 +224,35 @@ export function errorContext(lines: LogLine[], context = 2): (number | null)[] {
     last = i;
   }
   return out;
+}
+
+export const errorContext = (lines: LogLine[], context = 2) => contextRows(lines, (l) => l.kind === "error", context);
+
+// Hides what differs between otherwise identical lines in two runs: hashes, ids, timings, versions.
+export function normaliseLine(line: string) {
+  return line
+    .replace(/\b[0-9a-f]{7,64}\b/gi, "#")
+    .replace(/\d+/g, "#")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Indices of lines in `failing` with no counterpart in `passing`. Blank lines never count.
+// When `passing` is only the tail of its log, lines before the first shared line can't be
+// compared, so they're left unmarked rather than reported as new.
+export function newLines(failing: LogLine[], passing: LogLine[], passingTruncated = false): Set<number> {
+  const seen = new Set(passing.map((l) => normaliseLine(l.text)));
+  const norms = failing.map((l) => normaliseLine(l.text));
+  const firstShared = passingTruncated ? Math.max(0, norms.findIndex((n) => n && seen.has(n))) : 0;
+  const out = new Set<number>();
+  norms.forEach((norm, i) => {
+    if (i >= firstShared && norm && !seen.has(norm)) out.add(i);
+  });
+  return out;
+}
+
+export function formatSecs(secs: number) {
+  const m = Math.round(secs / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }

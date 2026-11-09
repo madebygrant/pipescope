@@ -1,12 +1,15 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde::Deserialize;
+use serde_json::json;
 use url::Url;
 
 use super::{split_repo, tail_log};
 use crate::error::Result;
 use crate::http::{Api, Auth, Fetched};
-use crate::model::{LogStep, LogTail, ProviderKind, RateInfo, Repo, Run, RunStatus, run_key};
+use crate::model::{LogStep, LogTail, PendingDeployment, ProviderKind, RateInfo, Repo, Run, RunStatus, StepPick, run_key};
 
 const API: &str = "https://api.github.com/";
 
@@ -14,12 +17,59 @@ const API: &str = "https://api.github.com/";
 pub struct GitHub {
     api: Api,
     login: String,
+    // Lowercased commit emails that count as "my commit".
+    emails: HashSet<String>,
     warnings: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct User {
     login: String,
+}
+
+#[derive(Deserialize)]
+struct Me {
+    login: String,
+    id: u64,
+    email: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HeadCommit {
+    author: Option<CommitAuthor>,
+}
+
+#[derive(Deserialize)]
+struct CommitAuthor {
+    name: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Pending {
+    environment: Environment,
+    #[serde(default)]
+    current_user_can_approve: bool,
+    #[serde(default)]
+    reviewers: Vec<Reviewer>,
+}
+
+#[derive(Deserialize)]
+struct Environment {
+    id: u64,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Reviewer {
+    reviewer: Option<ReviewerName>,
+}
+
+// A user has a login, a team has a name.
+#[derive(Deserialize)]
+struct ReviewerName {
+    login: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +103,7 @@ struct GhRun {
     updated_at: DateTime<Utc>,
     actor: Option<User>,
     triggering_actor: Option<User>,
+    head_commit: Option<HeadCommit>,
 }
 
 #[derive(Deserialize)]
@@ -67,6 +118,8 @@ struct Job {
     status: Option<String>,
     conclusion: Option<String>,
     html_url: Option<String>,
+    started_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
 }
 
 impl GitHub {
@@ -75,9 +128,10 @@ impl GitHub {
         headers.insert(ACCEPT, HeaderValue::from_static("application/vnd.github+json"));
         headers.insert("x-github-api-version", HeaderValue::from_static("2022-11-28"));
         let api = Api::new("GitHub", API, Auth::Bearer(token), 5000, headers)?;
-        let (me, headers): (User, _) = api.get_with_headers(api.url(&["user"])).await?;
+        let (me, headers): (Me, _) = api.get_with_headers(api.url(&["user"])).await?;
         let warnings = missing_scopes(headers.get("x-oauth-scopes").and_then(|v| v.to_str().ok()));
-        Ok(Self { api, login: me.login, warnings })
+        let emails = my_emails(&me, &crate::auth::git_emails());
+        Ok(Self { api, login: me.login, emails, warnings })
     }
 
     pub fn account(&self) -> &str {
@@ -129,6 +183,12 @@ impl GitHub {
     fn to_run(&self, repo: &str, r: GhRun) -> Run {
         let actor = r.triggering_actor.or(r.actor).map(|u| u.login);
         let id = r.id.to_string();
+        let author = r.head_commit.and_then(|c| c.author);
+        let my_commit = author
+            .as_ref()
+            .and_then(|a| a.email.as_deref())
+            .is_some_and(|e| self.emails.contains(&e.to_lowercase()));
+        let status = status(r.status.as_deref(), r.conclusion.as_deref());
         Run {
             key: run_key(ProviderKind::Github, repo, &id),
             provider: ProviderKind::Github,
@@ -139,9 +199,15 @@ impl GitHub {
             subtitle: r.display_title,
             branch: r.head_branch,
             commit: r.head_sha,
-            status: status(r.status.as_deref(), r.conclusion.as_deref()),
-            mine: actor.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&self.login)),
+            status,
+            mine: my_commit || actor.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&self.login)),
             actor,
+            author: author.and_then(|a| a.name),
+            build_secs: None,
+            failed_before: false,
+            flaky: false,
+            flaky_workflow: false,
+            watched: false,
             created_at: r.created_at,
             started_at: r.run_started_at,
             updated_at: r.updated_at,
@@ -160,7 +226,48 @@ impl GitHub {
         self.api.post(self.api.url(&["repos", owner, name, "actions", "runs", &run.id, "cancel"]), None).await
     }
 
-    pub async fn log_tail(&self, run: &Run, step: Option<&str>) -> Result<LogTail> {
+    // Sums job run times across every attempt. The run's own start and end would also
+    // count time spent waiting for a deployment approval.
+    pub async fn build_secs(&self, run: &Run) -> Result<u64> {
+        let (owner, name) = split_repo(&run.repo)?;
+        let mut url = self.api.url(&["repos", owner, name, "actions", "runs", &run.id, "jobs"]);
+        url.query_pairs_mut().append_pair("filter", "all").append_pair("per_page", "100");
+        let page: JobsPage = self.api.get(url).await?;
+        Ok(job_secs(&page.jobs))
+    }
+
+    pub async fn pending_deployments(&self, run: &Run) -> Result<Vec<PendingDeployment>> {
+        let (owner, name) = split_repo(&run.repo)?;
+        let pending: Vec<Pending> =
+            self.api.get(self.api.url(&["repos", owner, name, "actions", "runs", &run.id, "pending_deployments"])).await?;
+        Ok(pending
+            .into_iter()
+            .map(|p| PendingDeployment {
+                environment_id: p.environment.id,
+                environment: p.environment.name.unwrap_or_else(|| "environment".into()),
+                can_approve: p.current_user_can_approve,
+                reviewers: p
+                    .reviewers
+                    .into_iter()
+                    .filter_map(|r| r.reviewer.and_then(|n| n.login.or(n.name)))
+                    .collect(),
+            })
+            .collect())
+    }
+
+    pub async fn review_deployments(&self, run: &Run, environment_ids: &[u64], approve: bool) -> Result<()> {
+        let (owner, name) = split_repo(&run.repo)?;
+        let body = json!({
+            "environment_ids": environment_ids,
+            "state": if approve { "approved" } else { "rejected" },
+            "comment": if approve { "Approved from Pipescope" } else { "Rejected from Pipescope" },
+        });
+        self.api
+            .post(self.api.url(&["repos", owner, name, "actions", "runs", &run.id, "pending_deployments"]), Some(&body))
+            .await
+    }
+
+    pub async fn log_tail(&self, run: &Run, step: StepPick<'_>) -> Result<LogTail> {
         let (owner, name) = split_repo(&run.repo)?;
         let mut url = self.api.url(&["repos", owner, name, "actions", "runs", &run.id, "jobs"]);
         url.query_pairs_mut().append_pair("filter", "latest").append_pair("per_page", "100");
@@ -175,8 +282,9 @@ impl GitHub {
             })
             .collect();
         let job = match step {
-            Some(id) => page.jobs.iter().find(|j| j.id.to_string() == id),
-            None => pick_job(&page.jobs),
+            StepPick::Id(id) => page.jobs.iter().find(|j| j.id.to_string() == id),
+            StepPick::Name(name) => page.jobs.iter().find(|j| j.name == name),
+            StepPick::Auto => pick_job(&page.jobs),
         };
         let Some(job) = job else {
             return Ok(LogTail {
@@ -211,6 +319,24 @@ fn missing_scopes(header: Option<&str>) -> Vec<String> {
     }
 }
 
+// GitHub attributes commits to the account's public email or its noreply addresses;
+// the local git config covers a private email the API won't reveal.
+fn my_emails(me: &Me, git: &[String]) -> HashSet<String> {
+    let mut emails: HashSet<String> = git.iter().map(|e| e.to_lowercase()).collect();
+    emails.extend(me.email.iter().map(|e| e.to_lowercase()));
+    let login = me.login.to_lowercase();
+    emails.insert(format!("{login}@users.noreply.github.com"));
+    emails.insert(format!("{}+{login}@users.noreply.github.com", me.id));
+    emails
+}
+
+fn job_secs(jobs: &[Job]) -> u64 {
+    jobs.iter()
+        .filter_map(|j| Some((j.completed_at? - j.started_at?).num_seconds()))
+        .map(|s| u64::try_from(s).unwrap_or(0))
+        .sum()
+}
+
 fn pick_job(jobs: &[Job]) -> Option<&Job> {
     jobs.iter()
         .find(|j| matches!(j.conclusion.as_deref(), Some("failure" | "timed_out")))
@@ -238,6 +364,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn build_time_sums_finished_jobs() {
+        let json = r#"{"jobs":[
+            {"id":1,"name":"build","started_at":"2026-11-09T01:00:00Z","completed_at":"2026-11-09T01:03:00Z"},
+            {"id":2,"name":"deploy","started_at":"2026-11-11T01:00:00Z","completed_at":"2026-11-11T01:01:30Z"},
+            {"id":3,"name":"skipped","started_at":null,"completed_at":null}]}"#;
+        let page: JobsPage = serde_json::from_str(json).unwrap();
+        assert_eq!(job_secs(&page.jobs), 270, "the two days between build and deploy aren't counted");
+    }
+
+    #[test]
+    fn my_emails_include_noreply_and_git_config() {
+        let me = Me { login: "Grant".into(), id: 42, email: None };
+        let emails = my_emails(&me, &["Me@Example.com".into()]);
+        assert!(emails.contains("me@example.com"));
+        assert!(emails.contains("grant@users.noreply.github.com"));
+        assert!(emails.contains("42+grant@users.noreply.github.com"));
+    }
+
+    #[test]
     fn maps_statuses() {
         assert_eq!(status(Some("completed"), Some("success")), RunStatus::Success);
         assert_eq!(status(Some("completed"), Some("failure")), RunStatus::Failed);
@@ -255,19 +400,30 @@ mod tests {
         let json = r#"{"total_count":1,"workflow_runs":[{"id":42,"name":"CI","display_title":"Fix login",
             "run_number":7,"head_branch":"main","head_sha":"abc","status":"completed","conclusion":"failure",
             "html_url":"https://github.com/o/r/actions/runs/42","created_at":"2026-11-09T01:00:00Z",
-            "updated_at":"2026-11-09T01:05:00Z","actor":{"login":"bot"},"triggering_actor":{"login":"Grant"}}]}"#;
+            "updated_at":"2026-11-09T01:05:00Z","run_started_at":"2026-11-09T01:01:00Z",
+            "actor":{"login":"bot"},"triggering_actor":{"login":"Grant"}},
+            {"id":43,"name":"CI","run_number":8,"head_branch":"main","status":"in_progress","conclusion":null,
+            "html_url":"https://github.com/o/r/actions/runs/43","created_at":"2026-11-09T02:00:00Z",
+            "updated_at":"2026-11-09T02:00:00Z","triggering_actor":{"login":"merge-bot"},
+            "head_commit":{"author":{"name":"Grant","email":"Me@Example.com"}}}]}"#;
         let page: RunsPage = serde_json::from_str(json).unwrap();
         let gh = GitHub {
             api: Api::new("GitHub", API, Auth::Bearer(String::new()), 5000, HeaderMap::new()).unwrap(),
             login: "grant".into(),
+            emails: HashSet::from(["me@example.com".to_string()]),
             warnings: Vec::new(),
         };
-        let run = gh.to_run("o/r", page.workflow_runs.into_iter().next().unwrap());
+        let mut runs = page.workflow_runs.into_iter().map(|r| gh.to_run("o/r", r));
+        let run = runs.next().unwrap();
         assert_eq!(run.key, "github:o/r:42");
         assert_eq!(run.status, RunStatus::Failed);
         assert_eq!(run.actor.as_deref(), Some("Grant"));
         assert!(run.mine);
         assert_eq!(run.subtitle.as_deref(), Some("Fix login"));
+
+        let theirs_but_my_commit = runs.next().unwrap();
+        assert!(theirs_but_my_commit.mine);
+        assert_eq!(theirs_but_my_commit.author.as_deref(), Some("Grant"));
     }
 
     #[test]
@@ -285,6 +441,8 @@ mod tests {
             status: Some(status.into()),
             conclusion: conclusion.map(Into::into),
             html_url: None,
+            started_at: None,
+            completed_at: None,
         };
         let jobs = vec![job(1, "completed", Some("success")), job(2, "completed", Some("failure")), job(3, "in_progress", None)];
         assert_eq!(pick_job(&jobs).unwrap().id, 2);

@@ -4,10 +4,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::error::{Error, Result};
-use crate::model::{LogTail, ProviderKind, ProviderStatus, Run};
+use std::collections::HashMap;
+
+use crate::model::{LogTail, PendingDeployment, ProviderKind, ProviderStatus, Run, RunStatus, StepPick};
+use crate::store::{BuildTime, month};
 use crate::providers::{Client, Creds};
 use crate::scheduler::Control;
-use crate::{AppState, auth, connect, tray};
+use crate::{AppState, auth, connect, flaky, notify, tray};
 
 const LIST_WINDOW: TimeDelta = TimeDelta::days(7);
 
@@ -19,18 +22,38 @@ pub struct Settings {
     pinned: Vec<String>,
     muted: Vec<String>,
     onboarded: bool,
+    notify_branches: String,
+    quiet_hours: String,
+    auto_rerun_flaky: bool,
+    clients: HashMap<String, String>,
     // None in dev builds, where the login item would point at the debug binary.
     launch_at_login: Option<bool>,
 }
 
 #[tauri::command]
 pub fn get_runs(state: State<'_, AppState>) -> Result<Vec<Run>> {
-    state.store.lock().unwrap().recent_runs(Utc::now() - LIST_WINDOW)
+    let store = state.store.lock().unwrap();
+    let mut runs = store.recent_runs(Utc::now() - LIST_WINDOW)?;
+    // Marked against every stored run, not just the listed ones, so get_run agrees.
+    let mut all = store.all_runs()?;
+    flaky::annotate(&mut all, &store.repo_flags("watched"));
+    let marked: HashMap<String, Run> = all.into_iter().map(|r| (r.key.clone(), r)).collect();
+    for run in &mut runs {
+        if let Some(m) = marked.get(&run.key) {
+            (run.flaky, run.flaky_workflow, run.watched) = (m.flaky, m.flaky_workflow, m.watched);
+        }
+    }
+    Ok(runs)
 }
 
 #[tauri::command]
 pub fn get_run(state: State<'_, AppState>, key: String) -> Result<Option<Run>> {
-    state.store.lock().unwrap().get_run(&key)
+    let store = state.store.lock().unwrap();
+    let Some(run) = store.get_run(&key)? else { return Ok(None) };
+    // Flaky marks depend on the rest of the repo's history.
+    let mut history = store.repo_runs(run.provider, &run.repo)?;
+    flaky::annotate(&mut history, &store.repo_flags("watched"));
+    Ok(history.into_iter().find(|r| r.key == key))
 }
 
 #[tauri::command]
@@ -53,6 +76,10 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         pinned: sorted("pinned"),
         muted: sorted("muted"),
         onboarded: store.setting("onboarded")?.is_some(),
+        notify_branches: store.setting("notify_branches")?.unwrap_or_default(),
+        quiet_hours: store.setting("quiet_hours")?.unwrap_or_default(),
+        auto_rerun_flaky: store.setting("auto_rerun_flaky")?.as_deref() == Some("1"),
+        clients: store.clients(),
         launch_at_login: launch_at_login(&app)?,
     })
 }
@@ -62,6 +89,93 @@ fn launch_at_login(app: &AppHandle) -> Result<Option<bool>> {
         return Ok(None);
     }
     app.autolaunch().is_enabled().map(Some).map_err(|e| Error::Other(e.to_string()))
+}
+
+#[tauri::command]
+pub fn set_notify_rules(state: State<'_, AppState>, branches: String, quiet_hours: String) -> Result<()> {
+    let quiet_hours = quiet_hours.trim();
+    if !quiet_hours.is_empty() && notify::parse_quiet_hours(quiet_hours).is_none() {
+        return Err(Error::Other("Quiet hours should look like 22:00-07:00.".into()));
+    }
+    let store = state.store.lock().unwrap();
+    let branches = branches.trim();
+    store.set_setting("notify_branches", Some(branches).filter(|b| !b.is_empty()))?;
+    store.set_setting("quiet_hours", Some(quiet_hours).filter(|q| !q.is_empty()))
+}
+
+#[tauri::command]
+pub fn set_auto_rerun(state: State<'_, AppState>, on: bool) -> Result<()> {
+    state.store.lock().unwrap().set_setting("auto_rerun_flaky", on.then_some("1"))
+}
+
+#[tauri::command]
+pub fn watch_run(app: AppHandle, key: String, on: bool) -> Result<()> {
+    app.state::<AppState>().store.lock().unwrap().set_repo_flag("watched", &key, on)?;
+    let _ = app.emit("runs-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_repo_client(app: AppHandle, repo_id: String, client: Option<String>) -> Result<()> {
+    app.state::<AppState>().store.lock().unwrap().set_client(&repo_id, client.as_deref())
+}
+
+// Defaults to the current month, "YYYY-MM" in UTC.
+#[tauri::command]
+pub fn get_build_time(state: State<'_, AppState>, month: Option<String>) -> Result<Vec<BuildTime>> {
+    let month = month.unwrap_or_else(|| self::month(Utc::now()));
+    state.store.lock().unwrap().build_time(&month)
+}
+
+#[tauri::command]
+pub async fn get_pending_deployments(app: AppHandle, key: String) -> Result<Vec<PendingDeployment>> {
+    let (run, client) = lookup(&app, &key)?;
+    client.pending_deployments(&run).await
+}
+
+// Reviews every environment you're allowed to; GitHub rejects the rest anyway.
+#[tauri::command]
+pub async fn review_deployments(app: AppHandle, key: String, approve: bool) -> Result<()> {
+    let (run, client) = lookup(&app, &key)?;
+    let ids: Vec<u64> =
+        client.pending_deployments(&run).await?.into_iter().filter(|p| p.can_approve).map(|p| p.environment_id).collect();
+    if ids.is_empty() {
+        return Err(Error::Other("You're not a required reviewer for this deployment.".into()));
+    }
+    client.review_deployments(&run, &ids, approve).await?;
+    app.state::<AppState>().scheduler.send(run.provider, Control::PollRepo(run.repo));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn manual_step_url(app: AppHandle, key: String) -> Result<String> {
+    let (run, client) = lookup(&app, &key)?;
+    client.manual_step_url(&run).await
+}
+
+#[derive(Serialize)]
+pub struct Baseline {
+    run: Run,
+    log: LogTail,
+}
+
+// The newest earlier pass of the same workflow, preferring the same branch.
+fn baseline_run(history: &[Run], run: &Run) -> Option<Run> {
+    let passes = || {
+        history
+            .iter()
+            .filter(|r| r.key != run.key && r.title == run.title && r.status == RunStatus::Success && r.created_at < run.created_at)
+    };
+    passes().filter(|r| r.branch == run.branch).max_by_key(|r| r.created_at).or_else(|| passes().max_by_key(|r| r.created_at)).cloned()
+}
+
+#[tauri::command]
+pub async fn get_baseline_log(app: AppHandle, key: String, step: String) -> Result<Option<Baseline>> {
+    let (run, client) = lookup(&app, &key)?;
+    let history = app.state::<AppState>().store.lock().unwrap().repo_runs(run.provider, &run.repo)?;
+    let Some(base) = baseline_run(&history, &run) else { return Ok(None) };
+    let log = client.log_tail(&base, StepPick::Name(&step)).await?;
+    Ok(Some(Baseline { run: base, log }))
 }
 
 #[tauri::command]
@@ -150,7 +264,7 @@ fn lookup(app: &AppHandle, key: &str) -> Result<(Run, Client)> {
 pub async fn rerun(app: AppHandle, key: String, failed_only: bool) -> Result<()> {
     let (run, client) = lookup(&app, &key)?;
     client.rerun(&run, failed_only).await?;
-    app.state::<AppState>().scheduler.send(run.provider, Control::PollRepo(run.repo));
+    crate::scheduler::after_rerun(&app, &run);
     Ok(())
 }
 
@@ -165,7 +279,7 @@ pub async fn cancel(app: AppHandle, key: String) -> Result<()> {
 #[tauri::command]
 pub async fn get_log(app: AppHandle, key: String, step: Option<String>) -> Result<LogTail> {
     let (run, client) = lookup(&app, &key)?;
-    client.log_tail(&run, step.as_deref()).await
+    client.log_tail(&run, step.as_deref().map_or(StepPick::Auto, StepPick::Id)).await
 }
 
 #[tauri::command]
@@ -226,7 +340,52 @@ pub fn set_onboarded(state: State<'_, AppState>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::log_window_label;
+    use super::{baseline_run, log_window_label};
+    use crate::model::{ProviderKind, Run, RunStatus};
+    use chrono::{TimeZone, Utc};
+
+    fn run(id: &str, minute: u32, branch: &str, status: RunStatus) -> Run {
+        let t = Utc.with_ymd_and_hms(2026, 11, 9, 1, minute, 0).unwrap();
+        Run {
+            key: id.into(),
+            provider: ProviderKind::Github,
+            repo: "o/r".into(),
+            id: id.into(),
+            number: minute as u64,
+            title: "CI".into(),
+            subtitle: None,
+            branch: Some(branch.into()),
+            commit: None,
+            status,
+            actor: None,
+            mine: true,
+            created_at: t,
+            started_at: None,
+            updated_at: t,
+            web_url: String::new(),
+            author: None,
+            build_secs: None,
+            failed_before: false,
+            flaky: false,
+            flaky_workflow: false,
+            watched: false,
+        }
+    }
+
+    #[test]
+    fn baseline_prefers_the_same_branch_then_any() {
+        let failing = run("f", 30, "feature", RunStatus::Failed);
+        let history = vec![
+            failing.clone(),
+            run("later", 40, "feature", RunStatus::Success),
+            run("main", 20, "main", RunStatus::Success),
+            run("feat", 10, "feature", RunStatus::Success),
+        ];
+        assert_eq!(baseline_run(&history, &failing).unwrap().id, "feat");
+        let other = run("f2", 30, "new-branch", RunStatus::Failed);
+        assert_eq!(baseline_run(&history, &other).unwrap().id, "main");
+        assert!(baseline_run(&history[2..], &run("f3", 5, "main", RunStatus::Failed)).is_none());
+    }
 
     #[test]
     fn window_labels_stay_distinct() {

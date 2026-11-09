@@ -8,7 +8,7 @@ use url::Url;
 use super::{split_repo, tail_log};
 use crate::error::{Error, Result};
 use crate::http::{Api, Auth, Fetched};
-use crate::model::{LogStep, LogTail, ProviderKind, RateInfo, Repo, Run, RunStatus, run_key};
+use crate::model::{LogStep, LogTail, ProviderKind, RateInfo, Repo, Run, RunStatus, StepPick, run_key};
 
 const API: &str = "https://api.bitbucket.org/2.0/";
 const WEB: &str = "https://bitbucket.org";
@@ -51,6 +51,7 @@ struct Pipeline {
     creator: Option<Creator>,
     #[serde(default)]
     target: Target,
+    build_seconds_used: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +175,11 @@ impl Bitbucket {
             _ => "Pipeline".into(),
         };
         let creator = p.creator.unwrap_or(Creator { uuid: None, display_name: None });
+        let status = status(
+            &p.state.name,
+            p.state.result.as_ref().map(|r| r.name.as_str()),
+            p.state.stage.as_ref().map(|s| s.name.as_str()),
+        );
         Run {
             key: run_key(ProviderKind::Bitbucket, repo, &p.uuid),
             provider: ProviderKind::Bitbucket,
@@ -183,12 +189,14 @@ impl Bitbucket {
             subtitle: None,
             branch: p.target.ref_name,
             commit: p.target.commit.map(|c| c.hash),
-            status: status(
-                &p.state.name,
-                p.state.result.as_ref().map(|r| r.name.as_str()),
-                p.state.stage.as_ref().map(|s| s.name.as_str()),
-            ),
+            build_secs: p.build_seconds_used.filter(|_| status.is_finished()),
+            status,
             mine: creator.uuid.as_deref() == Some(self.uuid.as_str()),
+            author: None,
+            failed_before: false,
+            flaky: false,
+            flaky_workflow: false,
+            watched: false,
             actor: creator.display_name,
             created_at: p.created_on,
             started_at: None,
@@ -212,18 +220,39 @@ impl Bitbucket {
         self.api.post(self.api.url(&["repositories", ws, slug, "pipelines", &run.id, "stopPipeline"]), None).await
     }
 
-    pub async fn log_tail(&self, run: &Run, step: Option<&str>) -> Result<LogTail> {
+    async fn steps(&self, run: &Run) -> Result<Vec<Step>> {
         let (ws, slug) = split_repo(&run.repo)?;
         let mut url = self.api.url(&["repositories", ws, slug, "pipelines", &run.id, "steps", ""]);
         url.query_pairs_mut().append_pair("pagelen", "100");
-        let all: Vec<Step> = self.pages(url).await?;
+        self.pages(url).await
+    }
+
+    // Bitbucket's API can't run a manual step, so the best we can do is open the
+    // pipeline at the step that's waiting.
+    pub async fn manual_step_url(&self, run: &Run) -> Result<String> {
+        let steps = self.steps(run).await?;
+        // A paused step can report IN_PROGRESS with a PAUSED stage, so match on the mapped status first.
+        let waiting = steps
+            .iter()
+            .find(|s| step_status(s) == RunStatus::Waiting)
+            .or_else(|| steps.iter().find(|s| s.state.name != "COMPLETED" && s.state.name != "IN_PROGRESS"));
+        Ok(match waiting {
+            Some(step) => format!("{}/steps/{}", run.web_url, step.uuid),
+            None => run.web_url.clone(),
+        })
+    }
+
+    pub async fn log_tail(&self, run: &Run, step: StepPick<'_>) -> Result<LogTail> {
+        let (ws, slug) = split_repo(&run.repo)?;
+        let all = self.steps(run).await?;
         let steps = all
             .iter()
             .map(|s| LogStep { id: s.uuid.clone(), name: step_name(s), status: step_status(s) })
             .collect();
         let chosen = match step {
-            Some(id) => all.iter().find(|s| s.uuid == id),
-            None => pick_step(&all),
+            StepPick::Id(id) => all.iter().find(|s| s.uuid == id),
+            StepPick::Name(name) => all.iter().find(|s| step_name(s) == name),
+            StepPick::Auto => pick_step(&all),
         };
         let Some(chosen) = chosen else {
             return Ok(LogTail {

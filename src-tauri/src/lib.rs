@@ -1,6 +1,7 @@
 mod auth;
 mod commands;
 mod error;
+mod flaky;
 mod http;
 mod model;
 mod notify;
@@ -190,6 +191,15 @@ pub fn run() {
             commands::get_status,
             commands::get_settings,
             commands::set_notify_all,
+            commands::set_notify_rules,
+            commands::set_auto_rerun,
+            commands::watch_run,
+            commands::set_repo_client,
+            commands::get_build_time,
+            commands::get_pending_deployments,
+            commands::review_deployments,
+            commands::manual_step_url,
+            commands::get_baseline_log,
             commands::set_launch_at_login,
             commands::set_github_token,
             commands::set_bitbucket_auth,
