@@ -44,6 +44,8 @@ export interface Settings {
   pinned: string[];
   muted: string[];
   onboarded: boolean;
+  // Null in dev builds, where it can't be set.
+  launchAtLogin: boolean | null;
 }
 
 export interface LogStep {

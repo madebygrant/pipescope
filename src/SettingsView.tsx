@@ -30,6 +30,7 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
   const [bbToken, setBbToken] = useState("");
   const [notifyAll, setNotifyAll] = useState(false);
   const [muted, setMuted] = useState<string[]>([]);
+  const [launchAtLogin, setLaunchAtLogin] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,6 +39,8 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
       setNotifyAll(s.notifyAll);
       setBbEmail(s.bitbucketEmail ?? "");
       setMuted(s.muted);
+      // On first run, offer it ticked; it only takes effect on "Get started".
+      setLaunchAtLogin(s.launchAtLogin === null ? null : welcome ? true : s.launchAtLogin);
     });
   }, []);
 
@@ -151,6 +154,28 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
             Notify and colour the tray icon for everyone's runs, not just mine
           </label>
         </section>
+        <section>
+          <h3>Startup</h3>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={!!launchAtLogin}
+              disabled={launchAtLogin === null}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setLaunchAtLogin(on);
+                if (!welcome) {
+                  api.setLaunchAtLogin(on).catch((err) => {
+                    setLaunchAtLogin(!on);
+                    setError(errorText(err));
+                  });
+                }
+              }}
+            />
+            Open Pipescope when you log in
+          </label>
+          {launchAtLogin === null && <p className="hint">Only available in the built app, not in development.</p>}
+        </section>
         {muted.length > 0 && (
           <section>
             <h3>Muted repos</h3>
@@ -178,7 +203,12 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
           <div className="row welcome-done">
             <button
               disabled={!statuses.some((s) => s.state === "connected" || s.state === "connecting")}
-              onClick={onBack}
+              onClick={() =>
+                run("start", async () => {
+                  if (launchAtLogin) await api.setLaunchAtLogin(true);
+                  onBack();
+                })
+              }
             >
               Get started
             </button>

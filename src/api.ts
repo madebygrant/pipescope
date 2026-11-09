@@ -3,9 +3,11 @@ import type { LogTail, ProviderStatus, Run, Settings } from "./types";
 
 export const api = {
   runs: () => invoke<Run[]>("get_runs"),
+  run: (key: string) => invoke<Run | null>("get_run", { key }),
   status: () => invoke<ProviderStatus[]>("get_status"),
   settings: () => invoke<Settings>("get_settings"),
   setNotifyAll: (value: boolean) => invoke<void>("set_notify_all", { value }),
+  setLaunchAtLogin: (on: boolean) => invoke<void>("set_launch_at_login", { on }),
   setGithubToken: (token: string) => invoke<void>("set_github_token", { token }),
   setBitbucketAuth: (email: string, token: string) => invoke<void>("set_bitbucket_auth", { email, token }),
   refresh: () => invoke<void>("refresh"),

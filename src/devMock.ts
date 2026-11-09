@@ -65,7 +65,7 @@ const statuses: ProviderStatus[] = [
   },
 ];
 
-const settings = { notifyAll: false, bitbucketEmail: null, pinned: ["github:hatchd/api"], muted: ["github:hatchd/docs"], onboarded: true };
+const settings = { notifyAll: false, bitbucketEmail: null, pinned: ["github:hatchd/api"], muted: ["github:hatchd/docs"], onboarded: true, launchAtLogin: true };
 const log = [
   "##[group]Run actions/checkout@v4",
   "with:",
@@ -128,6 +128,7 @@ export function install() {
         if (args.on && at < 0) list.push(id);
         if (!args.on && at >= 0) list.splice(at, 1);
       }
+      if (cmd === "get_run") return runs.find((r) => r.key === args.key) ?? null;
       return responses[cmd] ?? null;
     },
   };

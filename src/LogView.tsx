@@ -9,7 +9,8 @@ import type { LogLine } from "./model";
 import { errorContext, isActive, parseLog } from "./model";
 import { IconBack, IconChevron, IconCopy, IconExpand, IconExternal, IconSearch, IconWrap, StatusIcon } from "./icons";
 
-const LIVE_REFRESH_MS = 5000;
+// GitHub only serves a job's log once it finishes, so its refresh just watches for that.
+const LIVE_REFRESH_MS = { github: 15_000, bitbucket: 5_000 };
 
 function loadWrap() {
   try {
@@ -57,7 +58,9 @@ export function LogView({ run, onBack, initialStep }: Props) {
   const findRef = useRef<HTMLInputElement>(null);
   const positioned = useRef<string | null>(null);
   const stickToBottom = useRef(false);
+  const fetchLog = useRef(() => {});
   const live = isActive(run);
+  const lastLive = useRef({ key: run.key, live });
 
   useEffect(() => {
     setLog(null);
@@ -65,7 +68,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
     setToggled(new Set());
     positioned.current = null;
     let stop = false;
-    const load = () =>
+    fetchLog.current = () =>
       api
         .log(run.key, step)
         .then((l) => {
@@ -76,13 +79,26 @@ export function LogView({ run, onBack, initialStep }: Props) {
           setError(null);
         })
         .catch((e) => !stop && setError(errorText(e)));
-    load();
-    const id = live ? window.setInterval(load, LIVE_REFRESH_MS) : undefined;
+    fetchLog.current();
     return () => {
       stop = true;
-      window.clearInterval(id);
+      fetchLog.current = () => {};
     };
-  }, [run.key, step, live]);
+  }, [run.key, step]);
+
+  // Kept apart from the load above so a run finishing refreshes in place instead of resetting the view.
+  useEffect(() => {
+    const finished = lastLive.current.key === run.key && lastLive.current.live && !live;
+    lastLive.current = { key: run.key, live };
+    if (finished) fetchLog.current();
+    if (!live) return;
+    const id = window.setInterval(async () => {
+      // The popover only hides on blur, so skip refreshes nobody can see.
+      if (document.visibilityState === "hidden" || !(await getCurrentWindow().isVisible())) return;
+      fetchLog.current();
+    }, LIVE_REFRESH_MS[run.provider]);
+    return () => window.clearInterval(id);
+  }, [run.key, run.provider, live]);
 
   const parsed = useMemo(() => parseLog(log?.text ?? ""), [log]);
   const { lines, groups } = parsed;
@@ -100,6 +116,9 @@ export function LogView({ run, onBack, initialStep }: Props) {
   const current = targets[Math.min(cursor, targets.length - 1)];
 
   useEffect(() => setCursor(0), [q]);
+  useEffect(() => {
+    if (!errorCount) setErrorsOnly(false);
+  }, [errorCount]);
 
   const reveal = (n: number) => {
     const line = lines[n - 1];
@@ -116,6 +135,8 @@ export function LogView({ run, onBack, initialStep }: Props) {
     if (positioned.current !== log.stepId) {
       positioned.current = log.stepId;
       setCursor(0);
+      // Group ids belong to one step's log; a live run can move on to another step.
+      setToggled(new Set());
       const first = lines.find((l) => l.kind === "error");
       if (first) reveal(first.n);
       else if (body) body.scrollTop = body.scrollHeight;
@@ -149,7 +170,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
         findRef.current?.select();
       } else if (key === "e") {
         e.preventDefault();
-        setErrorsOnly((v) => !v);
+        if (errorCount) setErrorsOnly((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -321,7 +342,13 @@ export function LogView({ run, onBack, initialStep }: Props) {
         <button className={`tool icon-only${wrap ? " on" : ""}`} onClick={toggleWrap} title="Wrap long lines" aria-pressed={wrap}>
           <IconWrap />
         </button>
-        <button className="tool icon-only" onClick={copy} disabled={!log} title={errorsOnly ? "Copy the errors" : "Copy the log"}>
+        <button
+          className="tool icon-only"
+          onClick={copy}
+          disabled={!log}
+          title={copied ? "Copied" : errorsOnly ? "Copy the errors" : "Copy the log"}
+          aria-label={copied ? "Copied" : errorsOnly ? "Copy the errors" : "Copy the log"}
+        >
           {copied ? "✓" : <IconCopy />}
         </button>
       </div>
@@ -376,15 +403,20 @@ export function LogWindow({ runKey, step }: { runKey: string; step?: string }) {
 
   useEffect(() => {
     const load = () =>
-      api.runs().then((runs) => {
-        const found = runs.find((r) => r.key === runKey);
+      api.run(runKey).then((found) => {
         if (found) setRun(found);
         else setMissing(true);
       });
     load();
-    const unlisten = listen("runs-updated", load);
+    // The first sweep emits one event per repo, so coalesce reloads.
+    let timer: number | undefined;
+    const unlisten = listen("runs-updated", () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(load, 300);
+    });
     return () => {
       unlisten.then((f) => f());
+      window.clearTimeout(timer);
     };
   }, [runKey]);
 
