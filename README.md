@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="128" height="128" alt="Pipescope logo"></p>
+
 # Pipescope
 
 A macOS menu bar app for GitHub Actions and Bitbucket Pipelines. It watches every repo you can access and tells you when your runs fail. You can re-run, cancel or read the log without opening a browser.
