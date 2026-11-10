@@ -4,6 +4,11 @@
 
 A macOS menu bar app for GitHub Actions and Bitbucket Pipelines. It watches every repo you can access and tells you when your runs fail. You can re-run, cancel or read the log without opening a browser.
 
+<p align="center">
+  <img src="docs/screenshots/list.png" width="360" alt="The popover: failing runs first, then running ones, with flaky and retry badges">
+  <img src="docs/screenshots/log.png" width="360" alt="A failing log compared with the last passing run, showing only the new lines">
+</p>
+
 ## Install
 
 Download the `.dmg` from the [latest release](https://github.com/madebygrant/pipescope/releases/latest) and drag Pipescope to Applications. The build isn't signed yet, so right-click it and choose Open the first time. Or [build it from source](docs/development.md#install-from-source) with one command, which avoids that warning.
