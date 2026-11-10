@@ -1,6 +1,6 @@
 [package]
 name = "pipescope"
-version = "0.3.1"
+version = "0.3.2"
 description = "CI monitor for GitHub Actions and Bitbucket Pipelines"
 authors = ["Grant"]
 edition = "2024"
