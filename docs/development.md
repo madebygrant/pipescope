@@ -6,6 +6,20 @@ You need Rust, Node and pnpm. Install the dependencies with:
 pnpm install
 ```
 
+## Install from source
+
+`scripts/install.sh` downloads the latest release's source, builds it and installs it to `/Applications`, replacing any running copy:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/madebygrant/pipescope/main/scripts/install.sh | bash
+```
+
+To read it before running it, download it with `curl -fsSLO` and open `install.sh`.
+
+Set `PIPESCOPE_REF=main` (or any branch or tag) to build something other than the latest release. If the Xcode command line tools, Rust, Node 20.19 or later, or pnpm are missing, the script lists them and offers to install each one. It installs nothing you haven't said yes to, and with no terminal to ask in it stops after the list.
+
+Run it again to update. Rust's build output stays in `~/Library/Caches/pipescope`, so later builds take a few minutes. Delete that folder to get the space back.
+
 ## Run
 
 ```sh

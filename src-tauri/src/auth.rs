@@ -4,12 +4,34 @@ use keyring::Entry;
 
 use crate::error::Result;
 
-const SERVICE: &str = "au.com.hatchd.pipescope";
+const SERVICE: &str = "au.com.madebygrant.pipescope";
+// Tokens saved before 0.3.2 live under the old bundle identifier.
+const LEGACY_SERVICE: &str = "au.com.hatchd.pipescope";
 
 pub fn get_secret(account: &str) -> Result<Option<String>> {
-    match Entry::new(SERVICE, account)?.get_password() {
+    if let Some(secret) = read(SERVICE, account)? {
+        return Ok(Some(secret));
+    }
+    let Some(secret) = read(LEGACY_SERVICE, account)? else { return Ok(None) };
+    set_secret(account, &secret)?;
+    // A leftover legacy entry is harmless, as the new one is read first.
+    if let Err(e) = remove(LEGACY_SERVICE, account) {
+        eprintln!("removing the old {account} token failed: {e}");
+    }
+    Ok(Some(secret))
+}
+
+fn read(service: &str, account: &str) -> Result<Option<String>> {
+    match Entry::new(service, account)?.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn remove(service: &str, account: &str) -> Result<()> {
+    match Entry::new(service, account)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.into()),
     }
 }
@@ -18,11 +40,11 @@ pub fn set_secret(account: &str, secret: &str) -> Result<()> {
     Ok(Entry::new(SERVICE, account)?.set_password(secret)?)
 }
 
+// Clears the legacy entry too, or the next read would bring the deleted token back. It goes
+// first, so a failure leaves the current token in place rather than half deleted.
 pub fn delete_secret(account: &str) -> Result<()> {
-    match Entry::new(SERVICE, account)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    remove(LEGACY_SERVICE, account)?;
+    remove(SERVICE, account)
 }
 
 // Apps launched from Finder get a minimal PATH, so try the Homebrew locations too.

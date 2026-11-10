@@ -28,5 +28,5 @@ The setting stores the app's full path. If you move the app, untick and tick it 
 
 ## Where data is kept
 
-- Tokens go in the macOS Keychain under the service `au.com.hatchd.pipescope`.
-- Runs and settings go in `~/Library/Application Support/au.com.hatchd.pipescope/pipescope.db`. Deleting this file resets Pipescope. Your tokens stay in the Keychain.
+- Tokens go in the macOS Keychain under the service `au.com.madebygrant.pipescope`.
+- Runs and settings go in `~/Library/Application Support/au.com.madebygrant.pipescope/pipescope.db`. Deleting this file resets Pipescope. Your tokens stay in the Keychain.

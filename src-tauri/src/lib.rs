@@ -21,6 +21,29 @@ use providers::{Client, Creds};
 use scheduler::Scheduler;
 use store::Store;
 
+// Before 0.3.2 the bundle identifier, and so the data folder, was this.
+const LEGACY_ID: &str = "au.com.hatchd.pipescope";
+
+// Copies the old database across so history and settings survive the identifier change.
+// A database that has never polled is replaced too: a dev build may have made it first.
+// The old folder is left alone in case of a downgrade.
+fn adopt_legacy_db(data_dir: &std::path::Path, dir: &std::path::Path) {
+    let (old, new) = (data_dir.join(LEGACY_ID).join("pipescope.db"), dir.join("pipescope.db"));
+    if old.exists()
+        && !has_polled(&new)
+        && let Err(e) = std::fs::copy(&old, &new)
+    {
+        eprintln!("copying the database from {} failed: {e}", old.display());
+    }
+}
+
+fn has_polled(db: &std::path::Path) -> bool {
+    db.exists()
+        && rusqlite::Connection::open(db)
+            .and_then(|c| c.query_row("SELECT EXISTS (SELECT 1 FROM polled_repos)", [], |r| r.get(0)))
+            .unwrap_or(false)
+}
+
 fn toggle_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::ALT | Modifiers::SUPER), Code::KeyP)
 }
@@ -165,6 +188,7 @@ pub fn run() {
 
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            adopt_legacy_db(&app.path().data_dir()?, &dir);
             app.manage(AppState {
                 store: Mutex::new(Store::open(&dir.join("pipescope.db"))?),
                 scheduler: Scheduler::default(),
@@ -213,4 +237,34 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LEGACY_ID, adopt_legacy_db, has_polled};
+    use crate::model::ProviderKind;
+    use crate::store::Store;
+
+    #[test]
+    fn adopts_the_old_database_unless_the_new_one_has_polled() {
+        let root = std::env::temp_dir().join(format!("pipescope-migrate-{}", std::process::id()));
+        let (old_dir, new_dir) = (root.join(LEGACY_ID), root.join("new"));
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let (old, new) = (old_dir.join("pipescope.db"), new_dir.join("pipescope.db"));
+        Store::open(&old).unwrap().apply_poll(ProviderKind::Github, "o/r", &[]).unwrap();
+
+        // A dev build got there first and made an empty database.
+        drop(Store::open(&new).unwrap());
+        assert!(!has_polled(&new));
+        adopt_legacy_db(&root, &new_dir);
+        assert!(has_polled(&new));
+
+        // Once the new one has history of its own, it's left alone.
+        std::fs::remove_file(&old).unwrap();
+        Store::open(&old).unwrap();
+        adopt_legacy_db(&root, &new_dir);
+        assert!(has_polled(&new));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
