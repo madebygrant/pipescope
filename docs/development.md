@@ -30,6 +30,8 @@ This runs the real app with hot reload for the UI. Rust changes rebuild and rest
 
 To work on the UI alone, run `pnpm dev` and open http://localhost:1420. Without Tauri, `src/devMock.ts` supplies fake runs, statuses and a sample log. The mock is only included in dev builds.
 
+The dev build and an installed Pipescope share the command line socket. Whichever opened last answers `pipescope` commands, so quit one of them when trying the command line.
+
 ## Test
 
 ```sh

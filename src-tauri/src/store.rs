@@ -225,6 +225,17 @@ impl Store {
         self.set_setting("clients", Some(&serde_json::to_string(&clients)?))
     }
 
+    // A followed repo's exact name, which the scheduler needs, from one typed in any case.
+    pub fn followed_repo(&self, repo: &str) -> Result<Option<(ProviderKind, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT provider, repo FROM polled_repos WHERE repo = ?1 COLLATE NOCASE ORDER BY provider LIMIT 1")?;
+        let mut rows = stmt.query([repo])?;
+        let Some(row) = rows.next()? else { return Ok(None) };
+        let (provider, name): (String, String) = (row.get(0)?, row.get(1)?);
+        Ok(ProviderKind::ALL.into_iter().find(|k| k.as_str() == provider).map(|p| (p, name)))
+    }
+
     pub fn get_run(&self, key: &str) -> Result<Option<Run>> {
         Ok(query_runs(&self.conn, "SELECT data FROM runs WHERE key = ?1", [key])?.pop())
     }
@@ -349,6 +360,14 @@ mod tests {
             flaky_workflow: false,
             watched: false,
         }
+    }
+
+    #[test]
+    fn finds_a_followed_repo_ignoring_case() {
+        let mut store = Store::in_memory().unwrap();
+        store.apply_poll(ProviderKind::Github, "Acme/Web", &[]).unwrap();
+        assert_eq!(store.followed_repo("acme/web").unwrap(), Some((ProviderKind::Github, "Acme/Web".into())));
+        assert_eq!(store.followed_repo("acme/api").unwrap(), None);
     }
 
     #[test]

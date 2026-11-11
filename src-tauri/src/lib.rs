@@ -1,9 +1,11 @@
 mod auth;
 mod checkouts;
+pub mod cli;
 mod commands;
 mod error;
 mod flaky;
 mod http;
+mod ipc;
 mod model;
 mod notify;
 mod providers;
@@ -21,6 +23,9 @@ use model::{ConnState, ProviderKind, ProviderStatus};
 use providers::{Client, Creds};
 use scheduler::Scheduler;
 use store::Store;
+
+// Must match tauri.conf.json; the command line finds the app's socket and bundle by it.
+pub const IDENTIFIER: &str = "au.com.madebygrant.pipescope";
 
 // Before 0.3.2 the bundle identifier, and so the data folder, was this.
 const LEGACY_ID: &str = "au.com.hatchd.pipescope";
@@ -202,6 +207,7 @@ pub fn run() {
                 checkouts: Mutex::default(),
             });
             notify::init(app.handle())?;
+            ipc::serve(app.handle());
             tray::init(app.handle())?;
             // Another app may already own the shortcut; the tray icon still works without it.
             if let Err(e) = app.global_shortcut().register(toggle_shortcut()) {
@@ -249,6 +255,12 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn identifier_matches_the_bundle() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], super::IDENTIFIER);
+    }
+
     use super::{LEGACY_ID, adopt_legacy_db, has_polled};
     use crate::model::ProviderKind;
     use crate::store::Store;

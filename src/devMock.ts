@@ -84,6 +84,7 @@ const settings = {
   clients: { "github:acme/web": "Acme", "github:acme/api": "Acme", "bitbucket:globex/mobile": "Globex" } as Record<string, string>,
   codeFolders: "",
   defaultCodeFolders: "~/Projects\n~/Developer\n~/Code",
+  cliPath: "/Applications/Pipescope.app/Contents/MacOS/pipescope",
 };
 const log = [
   "##[group]Run actions/checkout@v4",

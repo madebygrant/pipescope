@@ -70,20 +70,37 @@ fn walk(dir: &Path, depth: usize, found: &mut impl FnMut(&Path, Vec<(String, Str
     }
 }
 
+pub struct GitDirs {
+    // HEAD lives here; for a worktree it's the worktree's own folder.
+    pub own: PathBuf,
+    // Config and refs live here.
+    pub common: PathBuf,
+}
+
 // A worktree or submodule has a .git file pointing at the real git directory.
-fn git_config(dir: &Path) -> Option<String> {
+pub fn git_dirs(dir: &Path) -> Option<GitDirs> {
     let dot_git = dir.join(".git");
-    let git_dir = if dot_git.is_dir() {
-        dot_git
-    } else {
-        let pointer = std::fs::read_to_string(&dot_git).ok()?;
-        let target = dir.join(pointer.strip_prefix("gitdir:")?.trim());
-        match std::fs::read_to_string(target.join("commondir")) {
-            Ok(common) => target.join(common.trim()),
-            Err(_) => target,
-        }
+    if dot_git.is_dir() {
+        return Some(GitDirs { own: dot_git.clone(), common: dot_git });
+    }
+    let pointer = std::fs::read_to_string(&dot_git).ok()?;
+    let own = dir.join(pointer.strip_prefix("gitdir:")?.trim());
+    let common = match std::fs::read_to_string(own.join("commondir")) {
+        Ok(common) => own.join(common.trim()),
+        Err(_) => own.clone(),
     };
-    std::fs::read_to_string(git_dir.join("config")).ok()
+    Some(GitDirs { own, common })
+}
+
+fn git_config(dir: &Path) -> Option<String> {
+    std::fs::read_to_string(git_dirs(dir)?.common.join("config")).ok()
+}
+
+// The repo a clone belongs to, from its origin remote or else its first recognised one.
+pub fn repo_of(config: &str) -> Option<(ProviderKind, String)> {
+    let remotes = remotes(config);
+    let origin = remotes.iter().filter(|(name, _)| name == "origin").find_map(|(_, url)| parse_remote(url));
+    origin.or_else(|| remotes.iter().find_map(|(_, url)| parse_remote(url)))
 }
 
 fn remotes(config: &str) -> Vec<(String, String)> {

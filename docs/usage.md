@@ -76,6 +76,26 @@ When a repo has more than one clone, the one whose `origin` points at it wins, t
 
 A copied failure includes the checkout's path, and right-clicking a run offers Show Checkout in Finder.
 
+## Command line
+
+The app's binary is also a `pipescope` command. Settings › Command line has the line to paste into Terminal, which links it into `/usr/local/bin`:
+
+```sh
+sudo mkdir -p /usr/local/bin && sudo ln -sf /Applications/Pipescope.app/Contents/MacOS/pipescope /usr/local/bin/pipescope
+```
+
+It asks the running app, which answers from what it has already fetched. If the app isn't running, the command opens it in the background.
+
+| Command | Does |
+| --- | --- |
+| `pipescope failures` | Your failing runs from the last 48 hours, with each run's link, local checkout and key. `--all` includes everyone's. `--repo owner/name` or `--here` picks one repo and shows everyone's failures there, muted or not. |
+| `pipescope log [run]` | The last 500 lines of a run's log. A run is its key, its web address or `owner/repo#number`. Without one, it's the newest failure in the current folder's repo, on the current branch if one failed there. `--step` picks another job or step. |
+| `pipescope watch` | Waits for CI on the current folder's HEAD commit and branch, then exits 0 if it passed, 1 if it failed, 2 on an error or timeout, or 3 if it's waiting for an approval or manual step. `--commit`, `--branch` and `--repo` say what to watch instead, and `--timeout` (default `30m`) how long to wait. |
+
+Add `--json` to any command for machine-readable output. `pipescope help` lists everything.
+
+`watch` is for after a push, by you or a coding agent: `git push && pipescope watch` returns once every workflow for that commit has finished. While it waits, Pipescope checks the repo every 15 seconds. Ignored repos have no runs, so they can't be watched.
+
 ## Notifications
 
 By default you're notified when one of your runs fails, and again when that workflow passes on the next run. Settings has an option to include everyone's runs. Failures that arrive together come as one notification. Clicking a notification opens the popover on that run.

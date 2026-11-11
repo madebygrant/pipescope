@@ -29,13 +29,19 @@ pub struct Settings {
     clients: HashMap<String, String>,
     code_folders: String,
     default_code_folders: &'static str,
+    // The app's own binary, which is also the `pipescope` command.
+    cli_path: String,
     // None in dev builds, where the login item would point at the debug binary.
     launch_at_login: Option<bool>,
 }
 
 #[tauri::command]
 pub fn get_runs(state: State<'_, AppState>) -> Result<Vec<Run>> {
-    let store = state.store.lock().unwrap();
+    listed_runs(&state.store.lock().unwrap())
+}
+
+// The last week's runs, newest first, with flaky and watched marks.
+pub fn listed_runs(store: &crate::store::Store) -> Result<Vec<Run>> {
     let mut runs = store.recent_runs(Utc::now() - LIST_WINDOW)?;
     // Marked against every stored run, not just the listed ones, so get_run agrees.
     let mut all = store.all_runs()?;
@@ -86,6 +92,7 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         clients: store.clients(),
         code_folders: store.setting("code_folders")?.unwrap_or_default(),
         default_code_folders: checkouts::DEFAULT_FOLDERS,
+        cli_path: std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
         launch_at_login: launch_at_login(&app)?,
     })
 }
@@ -237,6 +244,10 @@ const CHECKOUTS_FRESH: std::time::Duration = std::time::Duration::from_secs(30);
 // Lowercased repo id → local checkout.
 #[tauri::command]
 pub async fn get_checkouts(app: AppHandle) -> Result<HashMap<String, String>> {
+    checkout_map(&app).await
+}
+
+pub async fn checkout_map(app: &AppHandle) -> Result<HashMap<String, String>> {
     let state = app.state::<AppState>();
     if let Some((at, found)) = state.checkouts.lock().unwrap().as_ref()
         && at.elapsed() < CHECKOUTS_FRESH
@@ -329,7 +340,7 @@ pub fn refresh(state: State<'_, AppState>) {
     }
 }
 
-fn lookup(app: &AppHandle, key: &str) -> Result<(Run, Client)> {
+pub fn lookup(app: &AppHandle, key: &str) -> Result<(Run, Client)> {
     let state = app.state::<AppState>();
     let run = state.store.lock().unwrap().get_run(key)?.ok_or_else(|| Error::Other("Run not found.".into()))?;
     let client = state

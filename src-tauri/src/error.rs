@@ -21,6 +21,8 @@ pub enum Error {
     #[error("window error: {0}")]
     Window(#[from] tauri::Error),
     #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
     Other(String),
 }
 

@@ -154,7 +154,7 @@ pub struct ChangedFile {
     pub status: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogStep {
     pub id: String,
@@ -162,7 +162,7 @@ pub struct LogStep {
     pub status: RunStatus,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogTail {
     pub step_id: String,

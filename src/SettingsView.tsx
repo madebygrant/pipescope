@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./api";
+import { copyText } from "./clipboard";
 import { IconBack } from "./icons";
 import type { ProviderStatus } from "./types";
 import type { Theme } from "./theme";
 import { loadTheme, saveTheme } from "./theme";
+
+// /usr/local/bin is on the default PATH but may not exist yet on Apple silicon Macs.
+const installCommand = (path: string) =>
+  `sudo mkdir -p /usr/local/bin && sudo ln -sf "${path}" /usr/local/bin/pipescope`;
 
 const GITHUB_TOKEN_URL = "https://github.com/settings/tokens/new?scopes=repo&description=Pipescope";
 const ATLASSIAN_TOKEN_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
@@ -43,6 +48,8 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
   const [defaultFolders, setDefaultFolders] = useState("");
   const [foldersSaved, setFoldersSaved] = useState(true);
   const [checkouts, setCheckouts] = useState<number | null>(null);
+  const [cliPath, setCliPath] = useState("");
+  const [cliCopied, setCliCopied] = useState(false);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +65,7 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
       setIgnored(s.ignoredRepos ?? "");
       setCodeFolders(s.codeFolders);
       setDefaultFolders(s.defaultCodeFolders);
+      setCliPath(s.cliPath);
       // On first run, offer it ticked; it only takes effect on "Get started".
       setLaunchAtLogin(s.launchAtLogin === null ? null : welcome ? true : s.launchAtLogin);
     });
@@ -355,6 +363,33 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
             </button>
           </div>
         </section>
+        {cliPath && (
+          <section>
+            <h3>Command line</h3>
+            <p className="hint">
+              The <code>pipescope</code> command lists failures, prints logs and waits for CI after a push, for you or a
+              coding agent. Run this in Terminal once to install it:
+            </p>
+            <label className="field">
+              <span>Install command</span>
+              <textarea readOnly rows={3} value={installCommand(cliPath)} onFocus={(e) => e.currentTarget.select()} />
+            </label>
+            <div className="row">
+              <button
+                onClick={async () => {
+                  await copyText(installCommand(cliPath));
+                  setCliCopied(true);
+                  window.setTimeout(() => setCliCopied(false), 1500);
+                }}
+              >
+                {cliCopied ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <p className="hint">
+              Then try <code>pipescope failures</code>, or <code>pipescope help</code> for the rest.
+            </p>
+          </section>
+        )}
         {muted.length > 0 && (
           <section>
             <h3>Muted repos</h3>

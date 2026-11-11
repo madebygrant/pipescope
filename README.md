@@ -25,6 +25,7 @@ Then connect GitHub, Bitbucket or both. GitHub uses your `gh` CLI login if you h
 - Spots flaky workflows that passed on a retry of the same commit, and can re-run them once for you.
 - Notifies you when your runs fail or recover, with optional branch filters and quiet hours. Watch any run to hear when it finishes.
 - Copies a failed run as Markdown for a coding agent: the errors, the lines new since the last pass, the changed files and where the repo is cloned on your Mac.
+- Has a `pipescope` command that lists failures, prints logs and waits for CI after a push, for scripts and coding agents.
 - Approves or rejects GitHub deployments waiting on you.
 - Groups repos by client and totals each client's build time per month.
 - Ignores repos matching patterns like `acme/legacy-*`, so they're never fetched.

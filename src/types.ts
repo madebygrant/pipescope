@@ -63,6 +63,8 @@ export interface Settings {
   // Folders searched for local checkouts; blank means defaultCodeFolders.
   codeFolders: string;
   defaultCodeFolders: string;
+  // The app's own binary, which is also the `pipescope` command.
+  cliPath: string;
 }
 
 export interface ChangedFile {
