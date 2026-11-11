@@ -175,9 +175,6 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
                   Re-run failed
                 </button>
               )}
-              <button onClick={p.onLog} title="Show log (⌘L)">
-                Log
-              </button>
               {active && (
                 <button onClick={() => p.onAsk("cancel")} title="Cancel (⌘.)">
                   Cancel
@@ -197,6 +194,9 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
                   {run.status === "failed" && run.provider === "github" ? "Re-run all" : "Re-run"}
                 </button>
               )}
+              <button className="open-log" onClick={p.onLog} title="Show log (⌘L)">
+                Log
+              </button>
             </div>
           )
         )}

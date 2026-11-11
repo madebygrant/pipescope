@@ -513,11 +513,12 @@ button.banner::after {
 
 .run {
   --row-bg: var(--bg);
+  --line3: 26px;
   position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 7px 14px;
+  padding: 5px 14px;
 }
 
 .run:hover {
@@ -723,9 +724,20 @@ button.banner::after {
 }
 
 .run-body > .run-state,
-.run-progress,
-.actions {
-  height: 16px;
+.run-progress {
+  height: var(--line3);
+  line-height: 16px;
+}
+
+.run-progress {
+  align-items: flex-start;
+}
+
+.run-progress .track {
+  margin-top: 6.5px;
+}
+
+.run-progress .progress-label {
   line-height: 16px;
 }
 
@@ -733,15 +745,16 @@ button.banner::after {
   display: flex;
   align-items: center;
   gap: 6px;
+  height: calc(var(--line3) - 4px);
+  margin-top: 4px;
 }
 
 .actions button {
-  height: 16px;
+  height: 100%;
   border: 1px solid currentColor;
   background: none;
-  padding: 0 6px;
-  line-height: 14px;
-  font: 700 10px var(--mono);
+  padding: 0 8px;
+  font: 700 10px/20px var(--mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -760,6 +773,10 @@ button.banner::after {
   border-color: var(--red);
   background: var(--red);
   color: var(--bg);
+}
+
+.actions button.open-log {
+  margin-left: auto;
 }
 
 .actions button.danger {
@@ -1017,23 +1034,48 @@ button.tile:not(:disabled):hover {
 }
 
 .step-pick {
-  display: inline-flex;
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
   font-weight: 700;
 }
 
-.step-pick select {
-  max-width: 180px;
+.step-select {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+}
+
+.step-select select {
+  width: 100%;
+  min-width: 0;
+  appearance: none;
   border: 1px solid var(--line-strong);
+  border-radius: 0;
   background: var(--bg);
   color: var(--text);
-  padding: 1px 4px;
+  padding: 2px 20px 2px 6px;
   font: 11px var(--mono);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.step-caret {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 10px;
 }
 
 .step-name {
+  flex: 1;
+  min-width: 0;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1041,6 +1083,7 @@ button.tile:not(:disabled):hover {
 }
 
 .tool {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
