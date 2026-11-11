@@ -73,12 +73,6 @@ export const IconExternal = () => (
     <path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v3.5h-9v-9H6" />
   </svg>
 );
-export const IconSearch = () => (
-  <svg {...ui} width={14} height={14}>
-    <circle cx="7" cy="7" r="4.5" />
-    <path d="M10.5 10.5l3 3" />
-  </svg>
-);
 export const IconPin = ({ filled }: { filled?: boolean }) => (
   <svg {...ui} width={13} height={13}>
     <path d="M6 2.5h4l-.6 4 2.1 2.2H4.5l2.1-2.2z" fill={filled ? "currentColor" : "none"} />

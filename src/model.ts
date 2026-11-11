@@ -129,6 +129,91 @@ export function duration(run: Run, now: number): string | null {
   return null;
 }
 
+export function clock(ms: number) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const mm = Math.floor(s / 60) % 60;
+  const ss = String(s % 60).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
+
+// Branch is left out of the key so a new branch still gets an estimate from main's runs.
+const typicalKey = (r: Run) => `${r.provider}|${r.repo}|${r.title}`;
+const SAMPLES = 10;
+
+// `runs` must be newest first so the samples are the latest passes.
+export function typicalDurations(runs: Run[]): Map<string, number> {
+  const samples = new Map<string, number[]>();
+  for (const r of runs) {
+    if (r.status !== "success") continue;
+    const ms = Date.parse(r.updatedAt) - Date.parse(r.startedAt ?? r.createdAt);
+    const list = samples.get(typicalKey(r)) ?? [];
+    if (ms > 0 && list.length < SAMPLES) samples.set(typicalKey(r), [...list, ms]);
+  }
+  const out = new Map<string, number>();
+  for (const [key, list] of samples) {
+    const sorted = list.sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    out.set(key, sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2);
+  }
+  return out;
+}
+
+export interface Progress {
+  elapsed: number;
+  typical: number | null;
+  // 0–1; null when there's no estimate or the run is still queued.
+  fraction: number | null;
+}
+
+export function progress(run: Run, now: number, typical: Map<string, number>): Progress {
+  const elapsed = now - Date.parse(run.startedAt ?? run.createdAt);
+  const t = typical.get(typicalKey(run)) ?? null;
+  return { elapsed, typical: t, fraction: run.status === "running" && t ? Math.min(1, elapsed / t) : null };
+}
+
+// Bitbucket runs can have no commit message.
+export const headline = (r: Run) => r.subtitle ?? r.title;
+
+export interface FailureSummary {
+  // Log line number of the "Expected" line.
+  n: number;
+  test: string | null;
+  expected: string;
+  received: string;
+  location: string | null;
+}
+
+// Jest qualifies some labels: "Expected length:", "Received string:", "Expected pattern:".
+const EXPECTED = /^\s*Expected(?: \w+){0,2}:\s+(.+?)\s*$/;
+const RECEIVED = /^\s*Received(?: \w+){0,2}:\s+(.+?)\s*$/;
+// Jest's "● suite › test" and Vitest's "FAIL  file > suite > test".
+const TEST_NAME = /^\s*(?:●\s+(.+)|(?:FAIL|×|✕)\s+\S+\s+>\s+(.+))$/;
+// Node prints "at fn (file:line:col)"; Vitest prints "❯ file:line:col".
+const FRAME = /(?:\bat\b|❯).*?\(?((?:[\w.@-]+\/)*[\w.@-]+\.\w+:\d+)(?::\d+)?\)?\s*$/;
+
+export function failureSummary(lines: LogLine[]): FailureSummary | null {
+  const at = lines.findIndex((l) => EXPECTED.test(l.text));
+  if (at < 0) return null;
+  const rec = lines.slice(at + 1, at + 6).find((l) => RECEIVED.test(l.text));
+  if (!rec) return null;
+  let test: string | null = null;
+  for (let i = at - 1; i >= Math.max(0, at - 15) && !test; i--) {
+    const m = lines[i].text.match(TEST_NAME);
+    if (m) test = (m[1] ?? m[2]).replace(/\s+>\s+/g, " › ");
+  }
+  const frame = lines
+    .slice(at + 1, at + 20)
+    .map((l) => (l.text.includes("node_modules") ? null : l.text.match(FRAME)))
+    .find(Boolean);
+  return {
+    n: lines[at].n,
+    test,
+    expected: lines[at].text.match(EXPECTED)![1],
+    received: rec.text.match(RECEIVED)![1],
+    location: frame ? frame[1] : null,
+  };
+}
+
 export function ago(iso: string, now: number) {
   const secs = Math.max(0, (now - Date.parse(iso)) / 1000);
   if (secs < 60) return "just now";
