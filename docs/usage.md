@@ -92,7 +92,7 @@ It asks the running app, which answers from what it has already fetched. If the 
 | `pipescope log [run]` | The last 500 lines of a run's log. A run is its key, its web address or `owner/repo#number`. Without one, it's the newest failure in the current folder's repo, on the current branch if one failed there. `--step` picks another job or step. |
 | `pipescope watch` | Waits for CI on the current folder's HEAD commit and branch, then exits 0 if it passed, 1 if it failed, 2 on an error or timeout, or 3 if it's waiting for an approval or manual step. `--commit`, `--branch` and `--repo` say what to watch instead, and `--timeout` (default `30m`) how long to wait. |
 
-Add `--json` to any command for machine-readable output. `pipescope help` lists everything.
+Add `--json` to any command for machine-readable output. `pipescope` on its own, or `pipescope help`, lists everything.
 
 `watch` is for after a push, by you or a coding agent: `git push && pipescope watch` returns once every workflow for that commit has finished. While it waits, Pipescope checks the repo every 15 seconds. Ignored repos have no runs, so they can't be watched.
 

@@ -40,6 +40,12 @@ pub fn run_if_cli() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Older macOS passes -psn_<id> when Finder launches an app.
     match args.first() {
+        // LaunchServices (Finder, `open`, login items) starts the app directly under launchd. Run from
+        // a shell, script or coding agent, plain `pipescope` explains itself rather than start a second copy.
+        None if !cfg!(debug_assertions) && std::os::unix::process::parent_id() != 1 => {
+            println!("{USAGE}");
+            Some(0)
+        }
         None => None,
         Some(a) if a.starts_with("-psn_") => None,
         Some(_) => Some(main(&args)),
