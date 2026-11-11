@@ -5,8 +5,10 @@
 A macOS menu bar app for GitHub Actions and Bitbucket Pipelines. It watches every repo you can access and tells you when your runs fail. You can re-run, cancel or read the log without opening a browser.
 
 <p align="center">
-  <img src="docs/screenshots/list.png" width="400" alt="The popover in dark mode: counts of failing, running and passed runs, then failing runs with re-run and log icons, then running ones with progress bars">
-  <img src="docs/screenshots/log.png" width="400" alt="A failing log led by its error count, the lines new since the last pass, and the test's expected and received values">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/list.png">
+    <img src="docs/screenshots/list-light.png" width="400" alt="The popover: counts of failing, running and passed runs, then failing runs with re-run and log icons, then running ones with progress bars">
+  </picture>
 </p>
 
 ## Install
@@ -26,6 +28,23 @@ Then connect GitHub, Bitbucket or both. GitHub uses your `gh` CLI login if you h
 - Groups repos by client and totals each client's build time per month.
 - Ignores repos matching patterns like `acme/legacy-*`, so they're never fetched.
 - Comes in light and dark, following macOS or set by hand.
+
+## Screenshots
+
+<table>
+  <tr>
+    <th>Light</th>
+    <th>Dark</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/list-light.png" width="360" alt="The run list in the light theme"></td>
+    <td><img src="docs/screenshots/list.png" width="360" alt="The run list in the dark theme"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/log-light.png" width="360" alt="A failing log in the light theme, led by its error count, the lines new since the last pass, and the test's expected and received values"></td>
+    <td><img src="docs/screenshots/log.png" width="360" alt="The same failing log in the dark theme"></td>
+  </tr>
+</table>
 
 ## Docs
 
