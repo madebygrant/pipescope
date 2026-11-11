@@ -26,3 +26,6 @@ dist-ssr
 # Design exploration and generated artwork
 assets/mockups/
 assets/logo-1024.png
+
+# Private planning notes
+docs/roadmap.md

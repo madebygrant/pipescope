@@ -33,4 +33,3 @@ Then connect GitHub, Bitbucket or both. GitHub uses your `gh` CLI login if you h
 - [Using Pipescope](docs/usage.md): the list, logs, notifications and keyboard shortcuts
 - [How it works](docs/how-it-works.md): polling, rate limits and what each provider can do
 - [Development](docs/development.md): building from source, tests, CI and releases
-- [Roadmap](docs/roadmap.md): what's next, including connecting to coding agents
