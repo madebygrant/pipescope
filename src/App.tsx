@@ -76,6 +76,7 @@ export default function App() {
         setQuery("");
         setFilter("all");
         setSelectedKey(key);
+        reveal.current = key;
         // A notification can be for someone else's run when "notify for everyone" is on.
         if (runsRef.current.some((r) => r.key === key && !r.mine)) toggleMine(false);
       }),
@@ -126,8 +127,15 @@ export default function App() {
     });
   }, [runs, now]);
 
+  // Only arrow keys and notifications scroll to the selection. Every poll replaces the run
+  // objects, so following `selected` itself would drag the list back while you scroll.
+  const reveal = useRef<string | null>(null);
   useEffect(() => {
-    if (selected) rowRefs.current.get(selected.key)?.scrollIntoView({ block: "nearest" });
+    if (!selected || reveal.current !== selected.key) return;
+    const row = rowRefs.current.get(selected.key);
+    if (!row) return;
+    reveal.current = null;
+    row.scrollIntoView({ block: "nearest" });
   }, [selected]);
 
   const setFlag = (id: string, flag: "pinned" | "muted", on: boolean) =>
@@ -306,6 +314,8 @@ export default function App() {
         const i = selected ? order.indexOf(selected) : -1;
         const next = e.key === "ArrowDown" ? Math.min(i + 1, order.length - 1) : Math.max(i - 1, 0);
         setSelectedKey(order[next].key);
+        // At either end the selection doesn't change, so nothing would clear a pending reveal.
+        if (order[next] !== selected) reveal.current = order[next].key;
         setConfirm(null);
       } else if (e.key === "Enter") {
         // Leave Enter alone on buttons and other controls so they still activate normally.
