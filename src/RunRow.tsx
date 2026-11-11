@@ -1,8 +1,9 @@
 import { forwardRef } from "react";
+import type React from "react";
 import type { PendingDeployment, Run } from "./types";
 import type { Pending, Progress } from "./model";
 import { ago, clock, duration, headline, isActive } from "./model";
-import { IconEye } from "./icons";
+import { IconCheck, IconExternal, IconEye, IconLog, IconRefresh, IconX } from "./icons";
 
 const STATUS_LABEL: Record<Run["status"], string> = {
   queued: "Queued",
@@ -36,6 +37,7 @@ interface Props {
   onDismiss: () => void;
   onWatch: () => void;
   onOpenStep: () => void;
+  onMenu: (e: React.MouseEvent) => void;
 }
 
 const CONFIRM_TEXT: Record<Confirm, [string, string]> = {
@@ -94,9 +96,13 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
   ].filter(Boolean);
   const label = run.status === "success" && run.flaky ? "Passed on retry" : STATUS_LABEL[run.status];
   const state = [label, ...flags].join(" · ");
-  // The selected row swaps its status line for buttons, so the status moves into the meta line.
-  const showActions = (p.selected || !!p.confirming) && !p.pending;
-  const stateText = active && p.progress ? progressLabel(run, p.progress) : state;
+  const failedOnly = run.status === "failed" && run.provider === "github";
+  const rerunTitle =
+    run.provider === "bitbucket"
+      ? "Start a new pipeline on the same commit"
+      : failedOnly
+        ? "Re-run failed jobs"
+        : "Re-run all jobs";
 
   return (
     <div
@@ -104,8 +110,8 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
       className={`run ${run.status}${p.selected ? " selected" : ""}`}
       role="option"
       aria-selected={p.selected}
-      onMouseEnter={p.onSelect}
       onFocus={p.onSelect}
+      onContextMenu={p.onMenu}
     >
       <span className={`run-num${String(run.number).length > 4 ? " long" : ""}`} aria-hidden>
         {run.number}
@@ -115,30 +121,9 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
           <span className="run-title">
             {headline(run)}
             <span className="visually-hidden"> #{run.number}</span>
-            {run.watched && (
-              <span className="badge watched" title="You'll be notified when this finishes">
-                <IconEye />
-              </span>
-            )}
           </span>
-          <span className="run-meta">
-            {showActions && <span className={`run-state ${run.status}`}>{stateText} · </span>}
-            {meta}
-          </span>
+          <span className="run-meta">{meta}</span>
         </button>
-        {!showActions && (p.pending ? (
-          <span className="run-state pending">
-            <span className="mini-spin" />
-            {{ rerun: "Re-run requested…", cancel: "Cancelling…", review: "Sending review…" }[p.pending.kind]}
-          </span>
-        ) : active && p.progress ? (
-          <ProgressLine run={run} progress={p.progress} />
-        ) : (
-          <span className={`run-state ${run.status}`} title={run.flakyWorkflow ? "This workflow has recently passed on retry, so a re-run may fix it (⌘R)" : undefined}>
-            {state}
-          </span>
-        ))}
-
         {p.confirming ? (
           <div className="actions confirm">
             <span>{CONFIRM_TEXT[p.confirming][0]}</span>
@@ -147,59 +132,58 @@ export const RunRow = forwardRef<HTMLDivElement, Props>(function RunRow(p, ref) 
             </button>
             <button onClick={p.onDismiss}>Back</button>
           </div>
+        ) : p.pending ? (
+          <span className="run-state pending">
+            <span className="mini-spin" />
+            {{ rerun: "Re-run requested…", cancel: "Cancelling…", review: "Sending review…" }[p.pending.kind]}
+          </span>
+        ) : active && p.progress ? (
+          <ProgressLine run={run} progress={p.progress} />
         ) : (
-          showActions && (
-            <div className="actions">
-              {approvable.length > 0 && (
-                <>
-                  <button className="primary" onClick={() => p.onAsk("approve")} title="Approve the deployment">
-                    Approve
-                  </button>
-                  <button onClick={() => p.onAsk("reject")} title="Reject the deployment">
-                    Reject
-                  </button>
-                </>
-              )}
-              {waiting && run.provider === "bitbucket" && (
-                <button onClick={p.onOpenStep} title="Bitbucket can only run manual steps from its website">
-                  Open step
-                </button>
-              )}
-              {!finished && (
-                <button onClick={p.onWatch} title={run.watched ? "Stop watching (⌘D)" : "Notify me when this finishes (⌘D)"}>
-                  {run.watched ? "Unwatch" : "Watch"}
-                </button>
-              )}
-              {run.status === "failed" && run.provider === "github" && (
-                <button className="primary" onClick={() => p.onRerun(true)} title="Re-run failed jobs (⌘R)">
-                  Re-run failed
-                </button>
-              )}
-              <button onClick={p.onLog} title="Show log (⌘L)">
-                Log
-              </button>
-              {active && (
-                <button onClick={() => p.onAsk("cancel")} title="Cancel (⌘.)">
-                  Cancel
-                </button>
-              )}
-              {finished && (
-                <button
-                  onClick={() => p.onRerun(false)}
-                  title={
-                    run.provider === "bitbucket"
-                      ? "Start a new pipeline on the same commit (⌘R)"
-                      : run.status === "failed"
-                        ? "Re-run all jobs (⇧⌘R)"
-                        : "Re-run all jobs (⌘R)"
-                  }
-                >
-                  {run.status === "failed" && run.provider === "github" ? "Re-run all" : "Re-run"}
-                </button>
-              )}
-            </div>
-          )
+          <span className={`run-state ${run.status}`} title={run.flakyWorkflow ? "This workflow has recently passed on retry, so a re-run may fix it" : undefined}>
+            {state}
+          </span>
         )}
+      </div>
+      <div className="row-icons">
+        {approvable.length > 0 ? (
+          <>
+            <button className="row-icon" onClick={() => p.onAsk("approve")} disabled={!!p.pending} title="Approve the deployment" aria-label="Approve the deployment">
+              <IconCheck />
+            </button>
+            <button className="row-icon" onClick={() => p.onAsk("reject")} disabled={!!p.pending} title="Reject the deployment" aria-label="Reject the deployment">
+              <IconX />
+            </button>
+          </>
+        ) : waiting && run.provider === "bitbucket" ? (
+          <button className="row-icon" onClick={p.onOpenStep} title="Bitbucket can only run manual steps from its website" aria-label="Open the manual step">
+            <IconExternal />
+          </button>
+        ) : !finished ? (
+          <button
+            className={`row-icon${run.watched ? " on" : ""}`}
+            onClick={p.onWatch}
+            disabled={!!p.pending}
+            aria-pressed={run.watched}
+            title={run.watched ? "Stop watching" : "Notify me when this finishes"}
+            aria-label={run.watched ? "Stop watching" : "Notify me when this finishes"}
+          >
+            <IconEye />
+          </button>
+        ) : (
+          <button
+            className={`row-icon${run.status === "failed" ? " danger" : ""}`}
+            onClick={() => p.onRerun(failedOnly)}
+            disabled={!!p.pending}
+            title={rerunTitle}
+            aria-label={rerunTitle}
+          >
+            <IconRefresh />
+          </button>
+        )}
+        <button className="row-icon" onClick={p.onLog} title="Show log" aria-label="Show log">
+          <IconLog />
+        </button>
       </div>
     </div>
   );

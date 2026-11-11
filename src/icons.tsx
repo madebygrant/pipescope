@@ -133,3 +133,18 @@ export const IconTag = () => (
     <circle cx="5.3" cy="5.3" r="0.9" />
   </svg>
 );
+export const IconLog = () => (
+  <svg {...ui}>
+    <path d="M3 3.5h10M3 6.5h10M3 9.5h7M3 12.5h5" />
+  </svg>
+);
+export const IconCheck = () => (
+  <svg {...ui}>
+    <path d="M3 8.5l3.2 3.2L13 4.8" />
+  </svg>
+);
+export const IconX = () => (
+  <svg {...ui}>
+    <path d="M4 4l8 8M12 4l-8 8" />
+  </svg>
+);

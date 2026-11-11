@@ -23,6 +23,7 @@ pub struct Settings {
     muted: Vec<String>,
     onboarded: bool,
     notify_branches: String,
+    ignored_repos: String,
     quiet_hours: String,
     auto_rerun_flaky: bool,
     clients: HashMap<String, String>,
@@ -77,6 +78,7 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         muted: sorted("muted"),
         onboarded: store.setting("onboarded")?.is_some(),
         notify_branches: store.setting("notify_branches")?.unwrap_or_default(),
+        ignored_repos: store.setting("ignored_repos")?.unwrap_or_default(),
         quiet_hours: store.setting("quiet_hours")?.unwrap_or_default(),
         auto_rerun_flaky: store.setting("auto_rerun_flaky")?.as_deref() == Some("1"),
         clients: store.clients(),
@@ -101,6 +103,23 @@ pub fn set_notify_rules(state: State<'_, AppState>, branches: String, quiet_hour
     let branches = branches.trim();
     store.set_setting("notify_branches", Some(branches).filter(|b| !b.is_empty()))?;
     store.set_setting("quiet_hours", Some(quiet_hours).filter(|q| !q.is_empty()))
+}
+
+#[tauri::command]
+pub fn set_ignored_repos(app: AppHandle, state: State<'_, AppState>, patterns: String) -> Result<()> {
+    let patterns = patterns.trim();
+    {
+        let store = state.store.lock().unwrap();
+        store.set_setting("ignored_repos", Some(patterns).filter(|p| !p.is_empty()))?;
+        store.forget_repos(|repo| crate::scheduler::repo_ignored(patterns, repo))?;
+    }
+    // Relisting applies the patterns both ways: newly ignored repos stop, un-ignored ones come back.
+    for kind in ProviderKind::ALL {
+        state.scheduler.send(kind, Control::RefreshAll);
+    }
+    let _ = app.emit("runs-updated", ());
+    tray::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]

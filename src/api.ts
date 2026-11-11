@@ -20,6 +20,7 @@ export const api = {
   setOnboarded: () => invoke<void>("set_onboarded"),
   setNotifyRules: (branches: string, quietHours: string) => invoke<void>("set_notify_rules", { branches, quietHours }),
   setAutoRerun: (on: boolean) => invoke<void>("set_auto_rerun", { on }),
+  setIgnoredRepos: (patterns: string) => invoke<void>("set_ignored_repos", { patterns }),
   watch: (key: string, on: boolean) => invoke<void>("watch_run", { key, on }),
   setRepoClient: (repoId: string, client: string | null) => invoke<void>("set_repo_client", { repoId, client }),
   buildTime: (month?: string) => invoke<BuildTime[]>("get_build_time", { month: month ?? null }),

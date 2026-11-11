@@ -93,8 +93,8 @@ export function ClientsView({ runs, settings, onBack }: Props) {
   return (
     <div className="app">
       <header className="bar">
-        <button className="icon" title="Back (esc)" aria-label="Back" onClick={onBack}>
-          <IconBack />
+        <button className="back" title="Back (esc)" onClick={onBack}>
+          <IconBack /> Runs
         </button>
         <strong>Clients</strong>
         <div className="spacer" />

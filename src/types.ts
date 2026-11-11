@@ -54,6 +54,8 @@ export interface Settings {
   // Null in dev builds, where it can't be set.
   launchAtLogin: boolean | null;
   notifyBranches: string;
+  // Comma- or newline-separated owner/repo patterns that are never polled.
+  ignoredRepos: string;
   quietHours: string;
   autoRerunFlaky: boolean;
   // repoId → client name.

@@ -433,19 +433,23 @@ export function LogView({ run, onBack, initialStep }: Props) {
         {log && log.steps.length > 1 ? (
           <label className="step-pick">
             <span>Step</span>
-            <select value={log.stepId} onChange={(e) => setStep(e.target.value)} aria-label="Step">
-              {log.steps.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.status === "failed" ? "✕ " : ""}
-                  {s.name}
-                </option>
-              ))}
-            </select>
+            <span className="step-select">
+              <select value={log.stepId} onChange={(e) => setStep(e.target.value)} aria-label="Step">
+                {log.steps.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.status === "failed" ? "✕ " : ""}
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              <span className="step-caret" aria-hidden="true">
+                ▾
+              </span>
+            </span>
           </label>
         ) : (
           <span className="step-name">{log?.step}</span>
         )}
-        <div className="spacer" />
         <button
           className={`tool${mode === "errors" ? " on" : ""}`}
           onClick={() => setMode((m) => (m === "errors" ? "all" : "errors"))}
@@ -463,18 +467,6 @@ export function LogView({ run, onBack, initialStep }: Props) {
           aria-pressed={mode === "changes"}
         >
           Changes
-        </button>
-        <button className={`tool icon-only${wrap ? " on" : ""}`} onClick={toggleWrap} title="Wrap long lines" aria-label="Wrap long lines" aria-pressed={wrap}>
-          <IconWrap />
-        </button>
-        <button
-          className="tool icon-only"
-          onClick={copy}
-          disabled={!log}
-          title={copied ? "Copied" : filtered ? "Copy what's shown" : "Copy the log"}
-          aria-label={copied ? "Copied" : filtered ? "Copy what's shown" : "Copy the log"}
-        >
-          {copied ? "✓" : <IconCopy />}
         </button>
       </div>
 
@@ -499,6 +491,18 @@ export function LogView({ run, onBack, initialStep }: Props) {
           />
           {navLabel && <span className="find-count">{navLabel}</span>}
         </label>
+        <button className={`tool icon-only${wrap ? " on" : ""}`} onClick={toggleWrap} title="Wrap long lines" aria-label="Wrap long lines" aria-pressed={wrap}>
+          <IconWrap />
+        </button>
+        <button
+          className="tool icon-only"
+          onClick={copy}
+          disabled={!log}
+          title={copied ? "Copied" : filtered ? "Copy what's shown" : "Copy the log"}
+          aria-label={copied ? "Copied" : filtered ? "Copy what's shown" : "Copy the log"}
+        >
+          {copied ? "✓" : <IconCopy />}
+        </button>
       </div>
 
       {mode === "changes" && log && <div className="compare-note">{compareNote()}</div>}

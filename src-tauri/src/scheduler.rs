@@ -14,11 +14,30 @@ use crate::http::Fetched;
 use crate::model::{ConnState, ProviderKind, Repo, Run};
 use crate::notify::Change;
 use crate::providers::Client;
+use crate::store::Store;
 use crate::{AppState, flaky, notify, set_status_quiet, tray, update_status};
 
 const REPO_LIST_EVERY: Duration = Duration::from_secs(30 * 60);
 const RETRY_AFTER_ERROR: Duration = Duration::from_secs(60);
 const WARM_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+
+// Comma- or newline-separated `owner/repo` patterns where `*` matches anything, ignoring case.
+// A pattern without a slash is an owner, so `acme` ignores every acme repo.
+pub fn repo_ignored(patterns: &str, full_name: &str) -> bool {
+    let name = full_name.to_lowercase();
+    patterns.split([',', '\n']).map(str::trim).filter(|p| !p.is_empty()).any(|p| {
+        let p = p.to_lowercase();
+        if p.contains('/') { notify::glob(&p, &name) } else { notify::glob(&format!("{p}/*"), &name) }
+    })
+}
+
+fn ignored_patterns(store: &Store) -> String {
+    store.setting("ignored_repos").ok().flatten().unwrap_or_default()
+}
+
+fn drop_ignored(list: Vec<Repo>, patterns: &str) -> Vec<Repo> {
+    list.into_iter().filter(|r| !repo_ignored(patterns, &r.full_name)).collect()
+}
 
 pub enum Control {
     RefreshAll,
@@ -112,7 +131,8 @@ async fn run_loop(app: AppHandle, client: Client, mut rx: UnboundedReceiver<Cont
         if now >= repos_due {
             match client.list_repos().await {
                 Ok(list) => {
-                    merge(&mut repos, list, now);
+                    let ignored = ignored_patterns(&app.state::<AppState>().store.lock().unwrap());
+                    merge(&mut repos, drop_ignored(list, &ignored), now);
                     repos_due = now + REPO_LIST_EVERY;
                     let count = repos.len();
                     update_status(&app, kind, |s| {
@@ -164,6 +184,11 @@ async fn run_loop(app: AppHandle, client: Client, mut rx: UnboundedReceiver<Cont
 
 async fn poll(app: &AppHandle, client: &Client, tracked: &mut Tracked) -> Result<()> {
     let kind = client.kind();
+    // Ignored since the last relisting, which will drop it: skip the request.
+    if repo_ignored(&ignored_patterns(&app.state::<AppState>().store.lock().unwrap()), &tracked.repo.full_name) {
+        tracked.next_due = Instant::now() + interval(kind, Tier::Cold);
+        return Ok(());
+    }
     let fetched = match client.list_runs(&tracked.repo.full_name, tracked.etag.as_deref()).await {
         Ok(fetched) => fetched,
         Err(e) => {
@@ -182,15 +207,24 @@ async fn poll(app: &AppHandle, client: &Client, tracked: &mut Tracked) -> Result
         tracked.active = runs.iter().any(|r| r.status.is_active());
         tracked.newest_run = runs.iter().map(|r| r.created_at).max();
         let state = app.state::<AppState>();
-        let changes = state.store.lock().unwrap().apply_poll(kind, &tracked.repo.full_name, &runs);
+        let changes = {
+            let mut store = state.store.lock().unwrap();
+            // Checked under the lock set_ignored_repos holds while forgetting, so these runs can't be saved back.
+            if repo_ignored(&ignored_patterns(&store), &tracked.repo.full_name) {
+                None
+            } else {
+                Some(store.apply_poll(kind, &tracked.repo.full_name, &runs))
+            }
+        };
         match changes {
-            Ok(changes) => {
+            None => {}
+            Some(Ok(changes)) => {
                 let changes = finish_watched(app, &runs, changes);
                 let changes = auto_rerun(app, client, &tracked.repo.full_name, changes).await;
                 notify::send_all(app, changes);
                 time_finished(app, client, &runs).await;
             }
-            Err(e) => eprintln!("saving runs for {} failed: {e}", tracked.repo.full_name),
+            Some(Err(e)) => eprintln!("saving runs for {} failed: {e}", tracked.repo.full_name),
         }
         let _ = app.emit("runs-updated", ());
         tray::refresh(app);
@@ -357,6 +391,28 @@ fn merge(repos: &mut Vec<Tracked>, list: Vec<Repo>, now: Instant) {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn ignores_repos_by_pattern() {
+        let patterns = "acme/legacy-*,\n Old-Client/* , ";
+        assert!(repo_ignored(patterns, "acme/legacy-api"));
+        assert!(repo_ignored(patterns, "old-client/web"));
+        assert!(!repo_ignored(patterns, "acme/web"));
+        assert!(!repo_ignored("", "acme/web"));
+    }
+
+    #[test]
+    fn a_bare_name_ignores_the_whole_owner() {
+        assert!(repo_ignored("Globex", "globex/mobile"));
+        assert!(!repo_ignored("globex", "globex-labs/web"));
+    }
+
+    #[test]
+    fn relisting_drops_ignored_repos() {
+        let repo = |name: &str| Repo { full_name: name.into(), last_activity: None };
+        let kept = drop_ignored(vec![repo("acme/web"), repo("acme/legacy-api"), repo("globex/app")], "acme/legacy-*, globex");
+        assert_eq!(kept.iter().map(|r| r.full_name.as_str()).collect::<Vec<_>>(), ["acme/web"]);
+    }
 
     #[test]
     fn assigns_tiers() {

@@ -14,7 +14,7 @@
       {
         "label": "main",
         "title": "Pipescope",
-        "width": 400,
+        "width": 520,
         "height": 560,
         "resizable": false,
         "decorations": false,
