@@ -26,10 +26,12 @@ interface Props {
   runs: Run[];
   settings: Settings | null;
   onBack: () => void;
+  onClientsChanged: () => Promise<unknown>;
 }
 
-export function ClientsView({ runs, settings, onBack }: Props) {
+export function ClientsView({ runs, settings, onBack, onClientsChanged }: Props) {
   const [offset, setOffset] = useState(0);
+  const [editing, setEditing] = useState<string | null>(null);
   const [time, setTime] = useState<BuildTime[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,6 +92,18 @@ export function ClientsView({ runs, settings, onBack }: Props) {
   }, [runs, settings, time]);
 
   const hasClients = Object.keys(settings?.clients ?? {}).length > 0;
+  const clientNames = [...new Set(Object.values(settings?.clients ?? {}))].sort();
+
+  const save = async (id: string, client: string) => {
+    setEditing(null);
+    setError(null);
+    try {
+      await api.setRepoClient(id, client.trim() || null);
+      await onClientsChanged();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
   return (
     <div className="app">
       <header className="bar">
@@ -111,8 +125,7 @@ export function ClientsView({ runs, settings, onBack }: Props) {
       <main className="list clients">
         {!hasClients && (
           <p className="empty">
-            Hover a repo heading in the list and click the tag to give it a client. Build time is totalled here per
-            client and month.
+            Click a repo to give it a client. Build time is totalled here per client and month.
           </p>
         )}
         {clients.map((c) => (
@@ -126,7 +139,33 @@ export function ClientsView({ runs, settings, onBack }: Props) {
             </h2>
             {c.repos.map((r) => (
               <div key={r.id} className="client-repo">
-                <span className="client-repo-name">{r.name}</span>
+                {editing === r.id ? (
+                  <input
+                    className="client-input"
+                    autoFocus
+                    list="clients-view-names"
+                    defaultValue={settings?.clients[r.id] ?? ""}
+                    placeholder="Client, blank for none"
+                    aria-label={`Client for ${r.name}`}
+                    // Marked done so the blur that follows unmounting doesn't save a second time.
+                    onKeyDown={(e) => {
+                      const input = e.currentTarget;
+                      if (e.key === "Enter") {
+                        input.dataset.done = "1";
+                        save(r.id, input.value);
+                      } else if (e.key === "Escape") {
+                        e.stopPropagation();
+                        input.dataset.done = "1";
+                        setEditing(null);
+                      }
+                    }}
+                    onBlur={(e) => !e.currentTarget.dataset.done && save(r.id, e.currentTarget.value)}
+                  />
+                ) : (
+                  <button className="client-repo-name" onClick={() => setEditing(r.id)} title="Set the client">
+                    {r.name}
+                  </button>
+                )}
                 {r.failing > 0 && <span className="chip failed">{r.failing} failing</span>}
                 {r.running > 0 && <span className="chip running">{r.running} running</span>}
                 <span className="client-time">{r.runs ? `${formatSecs(r.secs)} · ${r.runs} runs` : "No runs"}</span>
@@ -134,6 +173,11 @@ export function ClientsView({ runs, settings, onBack }: Props) {
             ))}
           </section>
         ))}
+        <datalist id="clients-view-names">
+          {clientNames.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
         <p className="hint client-note">
           Bitbucket times are billed build minutes. GitHub times are wall-clock time per run, which can differ from
           billed minutes when jobs run in parallel.

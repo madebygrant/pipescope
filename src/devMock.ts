@@ -159,6 +159,7 @@ export function install() {
       }
       // Fresh copies, as a real backend would send, so React sees each change.
       if (cmd === "get_runs") return runs.map((r) => ({ ...r }));
+      if (cmd === "get_settings") return { ...settings, clients: { ...settings.clients } };
       if (cmd === "get_run") return runs.find((r) => r.key === args.key) ?? null;
       if (cmd === "watch_run") {
         const r = runs.find((x) => x.key === args.key);

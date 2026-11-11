@@ -355,7 +355,9 @@ export default function App() {
     );
   }
   if (view.kind === "clients") {
-    return <ClientsView runs={runs} settings={settings} onBack={() => setView({ kind: "list" })} />;
+    return (
+      <ClientsView runs={runs} settings={settings} onBack={() => setView({ kind: "list" })} onClientsChanged={loadSettings} />
+    );
   }
   if (view.kind === "log") {
     // Look the run up again so the log view sees status changes and knows when to stop tailing.
