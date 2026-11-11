@@ -10,6 +10,7 @@ import {
   normaliseLine,
   parseLog,
   progress,
+  resolveClient,
   typicalDurations,
 } from "./model";
 import type { Run } from "./types";
@@ -61,6 +62,25 @@ describe("estimating how long a run takes", () => {
   it("formats a timer", () => {
     expect(clock(125_000)).toBe("2:05");
     expect(clock(3_725_000)).toBe("1:02:05");
+  });
+});
+
+describe("resolveClient", () => {
+  const names = ["Acme", "Globex"];
+
+  it("does nothing when the client is unchanged", () => {
+    expect(resolveClient("Acme", names, "Acme")).toBeUndefined();
+    expect(resolveClient("  acme ", names, "Acme")).toBeUndefined();
+    expect(resolveClient("", names, "")).toBeUndefined();
+  });
+
+  it("reuses an existing client typed in another case", () => {
+    expect(resolveClient("globex", names, "Acme")).toBe("Globex");
+  });
+
+  it("trims a new name and clears on blank", () => {
+    expect(resolveClient("  Initech ", names, "")).toBe("Initech");
+    expect(resolveClient("   ", names, "Acme")).toBeNull();
   });
 });
 

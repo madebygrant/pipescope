@@ -4,6 +4,7 @@ import type { BuildTime, Run, Settings } from "./types";
 import { repoId } from "./types";
 import { formatSecs, isActive } from "./model";
 import { IconBack, StatusIcon } from "./icons";
+import { ClientInput } from "./ClientInput";
 
 const NO_CLIENT = "No client";
 
@@ -94,11 +95,10 @@ export function ClientsView({ runs, settings, onBack, onClientsChanged }: Props)
   const hasClients = Object.keys(settings?.clients ?? {}).length > 0;
   const clientNames = [...new Set(Object.values(settings?.clients ?? {}))].sort();
 
-  const save = async (id: string, client: string) => {
-    setEditing(null);
+  const save = async (id: string, client: string | null) => {
     setError(null);
     try {
-      await api.setRepoClient(id, client.trim() || null);
+      await api.setRepoClient(id, client);
       await onClientsChanged();
     } catch (e) {
       setError(errorText(e));
@@ -140,26 +140,13 @@ export function ClientsView({ runs, settings, onBack, onClientsChanged }: Props)
             {c.repos.map((r) => (
               <div key={r.id} className="client-repo">
                 {editing === r.id ? (
-                  <input
-                    className="client-input"
-                    autoFocus
-                    list="clients-view-names"
-                    defaultValue={settings?.clients[r.id] ?? ""}
-                    placeholder="Client, blank for none"
-                    aria-label={`Client for ${r.name}`}
-                    // Marked done so the blur that follows unmounting doesn't save a second time.
-                    onKeyDown={(e) => {
-                      const input = e.currentTarget;
-                      if (e.key === "Enter") {
-                        input.dataset.done = "1";
-                        save(r.id, input.value);
-                      } else if (e.key === "Escape") {
-                        e.stopPropagation();
-                        input.dataset.done = "1";
-                        setEditing(null);
-                      }
-                    }}
-                    onBlur={(e) => !e.currentTarget.dataset.done && save(r.id, e.currentTarget.value)}
+                  <ClientInput
+                    className="inline"
+                    label={`Client for ${r.name}`}
+                    value={settings?.clients[r.id] ?? ""}
+                    names={clientNames}
+                    onSave={(client) => save(r.id, client)}
+                    onClose={() => setEditing(null)}
                   />
                 ) : (
                   <button className="client-repo-name" onClick={() => setEditing(r.id)} title="Set the client">
@@ -173,11 +160,6 @@ export function ClientsView({ runs, settings, onBack, onClientsChanged }: Props)
             ))}
           </section>
         ))}
-        <datalist id="clients-view-names">
-          {clientNames.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
         <p className="hint client-note">
           Bitbucket times are billed build minutes. GitHub times are wall-clock time per run, which can differ from
           billed minutes when jobs run in parallel.

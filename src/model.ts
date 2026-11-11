@@ -214,6 +214,15 @@ export function failureSummary(lines: LogLine[]): FailureSummary | null {
   };
 }
 
+// What saving `typed` as a repo's client means: undefined for no change, null to clear it.
+// A name matching an existing client except for case reuses that client, so "acme" doesn't start a second Acme.
+export function resolveClient(typed: string, names: string[], current: string): string | null | undefined {
+  const t = typed.trim();
+  const next = names.find((n) => n.toLowerCase() === t.toLowerCase()) ?? t;
+  if (next === current) return undefined;
+  return next || null;
+}
+
 export function ago(iso: string, now: number) {
   const secs = Math.max(0, (now - Date.parse(iso)) / 1000);
   if (secs < 60) return "just now";

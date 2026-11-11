@@ -11,6 +11,7 @@ import { ago, buildSections, isActive, progress, settled, typicalDurations, visi
 import { RunRow } from "./RunRow";
 import type { Confirm } from "./RunRow";
 import { ClientsView } from "./ClientsView";
+import { ClientInput } from "./ClientInput";
 import { SettingsView } from "./SettingsView";
 import { LogView } from "./LogView";
 import { IconClients, IconGear, IconMute, IconPin, IconRefresh, IconTag } from "./icons";
@@ -190,10 +191,9 @@ export default function App() {
     act(async () => {
       await openUrl(await api.manualStepUrl(run.key));
     });
-  const setClient = (id: string, client: string) =>
+  const setClient = (id: string, client: string | null) =>
     act(async () => {
-      setEditingClient(null);
-      await api.setRepoClient(id, client.trim() || null);
+      await api.setRepoClient(id, client);
       await loadSettings();
     });
 
@@ -405,6 +405,7 @@ export default function App() {
   );
 
   const empty = order.length === 0;
+  const clientNames = [...new Set(Object.values(settings?.clients ?? {}))].sort();
   const showFailing = filter !== "running" && sections.failing.length > 0;
   const showRunning = filter !== "failing" && sections.running.length > 0;
   const firstRepoSection = 1 + Number(showFailing) + Number(showRunning);
@@ -547,26 +548,12 @@ export default function App() {
                 <span className={`provider ${g.provider}`}>{g.provider === "github" ? "GH" : "BB"}</span>
                 <span className="repo-name">{g.repo}</span>
                 {editingClient === g.id ? (
-                  <input
-                    className="client-input"
-                    autoFocus
-                    list="client-names"
-                    defaultValue={settings?.clients[g.id] ?? ""}
-                    placeholder="Client"
-                    aria-label={`Client for ${g.repo}`}
-                    // Marked done so the blur that follows unmounting doesn't save a second time.
-                    onKeyDown={(e) => {
-                      const input = e.currentTarget;
-                      if (e.key === "Enter") {
-                        input.dataset.done = "1";
-                        setClient(g.id, input.value);
-                      } else if (e.key === "Escape") {
-                        e.stopPropagation();
-                        input.dataset.done = "1";
-                        setEditingClient(null);
-                      }
-                    }}
-                    onBlur={(e) => !e.currentTarget.dataset.done && setClient(g.id, e.currentTarget.value)}
+                  <ClientInput
+                    label={`Client for ${g.repo}`}
+                    value={settings?.clients[g.id] ?? ""}
+                    names={clientNames}
+                    onSave={(client) => setClient(g.id, client)}
+                    onClose={() => setEditingClient(null)}
                   />
                 ) : (
                   settings?.clients[g.id] && <span className="client-chip">{settings.clients[g.id]}</span>
@@ -611,11 +598,6 @@ export default function App() {
         )}
       </main>
 
-      <datalist id="client-names">
-        {[...new Set(Object.values(settings?.clients ?? {}))].map((c) => (
-          <option key={c} value={c} />
-        ))}
-      </datalist>
       <footer className="hints" aria-hidden>
         {[
           ["↑↓", "select"],
