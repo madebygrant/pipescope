@@ -3,7 +3,7 @@ pub mod github;
 
 use crate::error::{Error, Result};
 use crate::http::Fetched;
-use crate::model::{LogTail, PendingDeployment, ProviderKind, RateInfo, Repo, Run, StepPick};
+use crate::model::{ChangedFile, LogTail, PendingDeployment, ProviderKind, RateInfo, Repo, Run, StepPick};
 
 use bitbucket::Bitbucket;
 use github::GitHub;
@@ -112,6 +112,14 @@ impl Client {
         match self {
             Client::Github(c) => c.review_deployments(run, environment_ids, approve).await,
             Client::Bitbucket(_) => Err(Error::Other("Bitbucket has no deployment approvals.".into())),
+        }
+    }
+
+    // With no base, the head commit's own changes.
+    pub async fn changed_files(&self, repo: &str, base: Option<&str>, head: &str) -> Result<Vec<ChangedFile>> {
+        match self {
+            Client::Github(c) => c.changed_files(repo, base, head).await,
+            Client::Bitbucket(c) => c.changed_files(repo, base, head).await,
         }
     }
 

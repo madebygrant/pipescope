@@ -148,6 +148,13 @@ pub fn run_key(provider: ProviderKind, repo: &str, id: &str) -> String {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct ChangedFile {
+    pub path: String,
+    // added, modified, removed or renamed, as each provider words it.
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogStep {
     pub id: String,

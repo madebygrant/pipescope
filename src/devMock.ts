@@ -82,6 +82,8 @@ const settings = {
   quietHours: "",
   autoRerunFlaky: false,
   clients: { "github:acme/web": "Acme", "github:acme/api": "Acme", "bitbucket:globex/mobile": "Globex" } as Record<string, string>,
+  codeFolders: "",
+  defaultCodeFolders: "~/Projects\n~/Developer\n~/Code",
 };
 const log = [
   "##[group]Run actions/checkout@v4",
@@ -128,6 +130,14 @@ const responses: Record<string, unknown> = {
     run: { ...runs[runs.length - 1], number: 99, branch: "main", status: "success" },
     log: { stepId: "2", step: "test", steps: [], skipped: 0, webUrl: "https://example.com",
       text: log.split("\n").filter((l) => !/FAIL|login|Expected|Received|anonymous|failed|error/i.test(l)).join("\n") + "\nTests: 42 passed, 42 total" },
+  },
+  get_checkouts: { "github:acme/web": "/Users/me/Projects/acme/web", "github:acme/api": "/Users/me/Projects/acme/api" },
+  get_changed_files: {
+    base: { ...runs[runs.length - 1], number: 99, branch: "main", status: "success", commit: "9f8e7d6c5b4a" },
+    files: [
+      { path: "src/login.ts", status: "modified" },
+      { path: "src/session.ts", status: "added" },
+    ],
   },
   get_log: {
     stepId: "2",

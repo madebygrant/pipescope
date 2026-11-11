@@ -1,4 +1,5 @@
 mod auth;
+mod checkouts;
 mod commands;
 mod error;
 mod flaky;
@@ -57,6 +58,8 @@ pub struct AppState {
     // Bumped by each connect(); an older attempt that sees a newer number gives up, so
     // a retry loop from before a token change can't reconnect the old account.
     pub connect_gen: Mutex<HashMap<ProviderKind, u64>>,
+    // The last checkout scan and when it ran; see commands::get_checkouts.
+    pub checkouts: Mutex<Option<(std::time::Instant, HashMap<String, String>)>>,
 }
 
 pub fn update_status(app: &AppHandle, kind: ProviderKind, f: impl FnOnce(&mut ProviderStatus)) {
@@ -196,6 +199,7 @@ pub fn run() {
                 status: Mutex::default(),
                 notifier: notify::Notifier::default(),
                 connect_gen: Mutex::default(),
+                checkouts: Mutex::default(),
             });
             notify::init(app.handle())?;
             tray::init(app.handle())?;
@@ -225,6 +229,9 @@ pub fn run() {
             commands::review_deployments,
             commands::manual_step_url,
             commands::get_baseline_log,
+            commands::get_changed_files,
+            commands::get_checkouts,
+            commands::set_code_folders,
             commands::set_launch_at_login,
             commands::set_github_token,
             commands::set_bitbucket_auth,

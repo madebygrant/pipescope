@@ -60,6 +60,20 @@ export interface Settings {
   autoRerunFlaky: boolean;
   // repoId → client name.
   clients: Record<string, string>;
+  // Folders searched for local checkouts; blank means defaultCodeFolders.
+  codeFolders: string;
+  defaultCodeFolders: string;
+}
+
+export interface ChangedFile {
+  path: string;
+  status: string;
+}
+
+export interface Changes {
+  // The last pass the files are compared with; null means they're the run's own commit.
+  base: Run | null;
+  files: ChangedFile[];
 }
 
 export interface PendingDeployment {

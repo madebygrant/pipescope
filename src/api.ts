@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Baseline, BuildTime, LogTail, PendingDeployment, ProviderStatus, Run, Settings } from "./types";
+import type { Baseline, BuildTime, Changes, LogTail, PendingDeployment, ProviderStatus, Run, Settings } from "./types";
 
 export const api = {
   runs: () => invoke<Run[]>("get_runs"),
@@ -28,7 +28,24 @@ export const api = {
   reviewDeployments: (key: string, approve: boolean) => invoke<void>("review_deployments", { key, approve }),
   manualStepUrl: (key: string) => invoke<string>("manual_step_url", { key }),
   baselineLog: (key: string, step: string) => invoke<Baseline | null>("get_baseline_log", { key, step }),
+  changedFiles: (key: string) => invoke<Changes>("get_changed_files", { key }),
+  // Keys are lowercased repo ids.
+  checkouts: () => invoke<Record<string, string>>("get_checkouts"),
+  setCodeFolders: (folders: string) => invoke<void>("set_code_folders", { folders }),
 };
+
+// The last pass rarely changes while the app runs, so each run and step is fetched once.
+const baselines = new Map<string, Promise<Baseline | null>>();
+export function loadBaseline(key: string, step: string) {
+  const id = `${key}|${step}`;
+  let found = baselines.get(id);
+  if (!found) {
+    found = api.baselineLog(key, step);
+    found.catch(() => baselines.delete(id));
+    baselines.set(id, found);
+  }
+  return found;
+}
 
 export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : String(e));
 

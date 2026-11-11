@@ -6,11 +6,11 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 
-use crate::model::{LogTail, PendingDeployment, ProviderKind, ProviderStatus, Run, RunStatus, StepPick};
+use crate::model::{ChangedFile, LogTail, PendingDeployment, ProviderKind, ProviderStatus, Run, RunStatus, StepPick};
 use crate::store::{BuildTime, month};
 use crate::providers::{Client, Creds};
 use crate::scheduler::Control;
-use crate::{AppState, auth, connect, flaky, notify, tray};
+use crate::{AppState, auth, checkouts, connect, flaky, notify, tray};
 
 const LIST_WINDOW: TimeDelta = TimeDelta::days(7);
 
@@ -27,6 +27,8 @@ pub struct Settings {
     quiet_hours: String,
     auto_rerun_flaky: bool,
     clients: HashMap<String, String>,
+    code_folders: String,
+    default_code_folders: &'static str,
     // None in dev builds, where the login item would point at the debug binary.
     launch_at_login: Option<bool>,
 }
@@ -82,6 +84,8 @@ pub fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settin
         quiet_hours: store.setting("quiet_hours")?.unwrap_or_default(),
         auto_rerun_flaky: store.setting("auto_rerun_flaky")?.as_deref() == Some("1"),
         clients: store.clients(),
+        code_folders: store.setting("code_folders")?.unwrap_or_default(),
+        default_code_folders: checkouts::DEFAULT_FOLDERS,
         launch_at_login: launch_at_login(&app)?,
     })
 }
@@ -195,6 +199,65 @@ pub async fn get_baseline_log(app: AppHandle, key: String, step: String) -> Resu
     let Some(base) = baseline_run(&history, &run) else { return Ok(None) };
     let log = client.log_tail(&base, StepPick::Name(&step)).await?;
     Ok(Some(Baseline { run: base, log }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Changes {
+    // The last pass the files are compared with; without one, they're the run's own commit.
+    base: Option<Run>,
+    files: Vec<ChangedFile>,
+}
+
+// What to diff against: the last pass with a known commit, and whether it ran this same commit.
+fn compare_base(history: &[Run], run: &Run) -> (Option<Run>, bool) {
+    let base = baseline_run(history, run).filter(|b| b.commit.is_some());
+    let same = base.as_ref().is_some_and(|b| b.commit == run.commit);
+    (base, same)
+}
+
+#[tauri::command]
+pub async fn get_changed_files(app: AppHandle, key: String) -> Result<Changes> {
+    let (run, client) = lookup(&app, &key)?;
+    let head = run.commit.clone().ok_or_else(|| Error::Other("This run has no commit.".into()))?;
+    let history = app.state::<AppState>().store.lock().unwrap().repo_runs(run.provider, &run.repo)?;
+    let (base, same) = compare_base(&history, &run);
+    let files = if same {
+        Vec::new()
+    } else {
+        client.changed_files(&run.repo, base.as_ref().and_then(|b| b.commit.as_deref()), &head).await?
+    };
+    Ok(Changes { base, files })
+}
+
+// Long enough that the run menu doesn't walk the disk on every right-click,
+// short enough that a fresh clone shows up soon.
+const CHECKOUTS_FRESH: std::time::Duration = std::time::Duration::from_secs(30);
+
+// Lowercased repo id → local checkout.
+#[tauri::command]
+pub async fn get_checkouts(app: AppHandle) -> Result<HashMap<String, String>> {
+    let state = app.state::<AppState>();
+    if let Some((at, found)) = state.checkouts.lock().unwrap().as_ref()
+        && at.elapsed() < CHECKOUTS_FRESH
+    {
+        return Ok(found.clone());
+    }
+    let setting = state.store.lock().unwrap().setting("code_folders")?.unwrap_or_default();
+    let roots = checkouts::folders(&setting, &app.path().home_dir()?);
+    let found = tauri::async_runtime::spawn_blocking(move || checkouts::scan(&roots))
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
+    *state.checkouts.lock().unwrap() = Some((std::time::Instant::now(), found.clone()));
+    Ok(found)
+}
+
+#[tauri::command]
+pub fn set_code_folders(state: State<'_, AppState>, folders: String) -> Result<()> {
+    let folders = folders.trim();
+    state.store.lock().unwrap().set_setting("code_folders", Some(folders).filter(|f| !f.is_empty()))?;
+    *state.checkouts.lock().unwrap() = None;
+    Ok(())
 }
 
 #[tauri::command]
@@ -359,7 +422,7 @@ pub fn set_onboarded(state: State<'_, AppState>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{baseline_run, log_window_label};
+    use super::{baseline_run, compare_base, log_window_label};
     use crate::model::{ProviderKind, Run, RunStatus};
     use chrono::{TimeZone, Utc};
 
@@ -404,6 +467,25 @@ mod tests {
         let other = run("f2", 30, "new-branch", RunStatus::Failed);
         assert_eq!(baseline_run(&history, &other).unwrap().id, "main");
         assert!(baseline_run(&history[2..], &run("f3", 5, "main", RunStatus::Failed)).is_none());
+    }
+
+    #[test]
+    fn compares_with_the_last_pass_unless_it_ran_the_same_commit() {
+        let with = |mut r: Run, sha: Option<&str>| {
+            r.commit = sha.map(str::to_string);
+            r
+        };
+        let failing = with(run("f", 30, "feature", RunStatus::Failed), Some("head"));
+        let pass = with(run("p", 10, "feature", RunStatus::Success), Some("old"));
+        let (base, same) = compare_base(&[failing.clone(), pass], &failing);
+        assert_eq!((base.unwrap().id.as_str(), same), ("p", false));
+
+        let retry_pass = with(run("p", 10, "feature", RunStatus::Success), Some("head"));
+        assert!(compare_base(&[failing.clone(), retry_pass], &failing).1);
+
+        // A pass with no recorded commit can't be diffed against, so the run's own commit is used.
+        let no_sha = with(run("p", 10, "feature", RunStatus::Success), None);
+        assert_eq!(compare_base(&[failing.clone(), no_sha], &failing), (None, false));
     }
 
     #[test]

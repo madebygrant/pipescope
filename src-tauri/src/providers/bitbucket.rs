@@ -8,7 +8,7 @@ use url::Url;
 use super::{split_repo, tail_log};
 use crate::error::{Error, Result};
 use crate::http::{Api, Auth, Fetched};
-use crate::model::{LogStep, LogTail, ProviderKind, RateInfo, Repo, Run, RunStatus, StepPick, run_key};
+use crate::model::{ChangedFile, LogStep, LogTail, ProviderKind, RateInfo, Repo, Run, RunStatus, StepPick, run_key};
 
 const API: &str = "https://api.bitbucket.org/2.0/";
 const WEB: &str = "https://bitbucket.org";
@@ -77,6 +77,23 @@ struct Target {
     ref_name: Option<String>,
     commit: Option<Commit>,
     selector: Option<Selector>,
+}
+
+#[derive(Deserialize)]
+struct DiffStat {
+    status: String,
+    old: Option<DiffPath>,
+    new: Option<DiffPath>,
+}
+
+#[derive(Deserialize)]
+struct DiffPath {
+    path: String,
+}
+
+// A deleted file has no new path, so fall back to the old one.
+fn changed_files(stats: Vec<DiffStat>) -> Vec<ChangedFile> {
+    stats.into_iter().filter_map(|d| Some(ChangedFile { path: d.new.or(d.old)?.path, status: d.status })).collect()
 }
 
 #[derive(Deserialize)]
@@ -242,6 +259,18 @@ impl Bitbucket {
         })
     }
 
+    // Only the first page, which is plenty to point an agent somewhere.
+    pub async fn changed_files(&self, repo: &str, base: Option<&str>, head: &str) -> Result<Vec<ChangedFile>> {
+        let (ws, slug) = split_repo(repo)?;
+        // Bitbucket puts the changed commit first, the reverse of git diff; with topic=true
+        // "head..base" means git's base...head, what head adds since the two diverged.
+        let spec = base.map_or_else(|| head.to_string(), |base| format!("{head}..{base}"));
+        let mut url = self.api.url(&["repositories", ws, slug, "diffstat", &spec]);
+        url.query_pairs_mut().append_pair("topic", "true");
+        let page: Page<DiffStat> = self.api.get(url).await?;
+        Ok(changed_files(page.values))
+    }
+
     pub async fn log_tail(&self, run: &Run, step: StepPick<'_>) -> Result<LogTail> {
         let (ws, slug) = split_repo(&run.repo)?;
         let all = self.steps(run).await?;
@@ -333,6 +362,23 @@ fn rerun_target(target: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lists_changed_files_including_deleted_ones() {
+        let page: Page<DiffStat> = serde_json::from_str(
+            r#"{"values":[
+                {"status":"modified","old":{"path":"src/a.ts"},"new":{"path":"src/a.ts"}},
+                {"status":"removed","old":{"path":"src/gone.ts"},"new":null},
+                {"status":"renamed","old":{"path":"x.ts"},"new":{"path":"y.ts"}}
+            ]}"#,
+        )
+        .unwrap();
+        let files: Vec<(String, String)> = changed_files(page.values).into_iter().map(|f| (f.status, f.path)).collect();
+        assert_eq!(
+            files,
+            [("modified", "src/a.ts"), ("removed", "src/gone.ts"), ("renamed", "y.ts")].map(|(s, p)| (s.into(), p.into()))
+        );
+    }
+
     use super::*;
 
     #[test]

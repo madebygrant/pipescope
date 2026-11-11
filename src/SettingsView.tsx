@@ -39,6 +39,10 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
   const [autoRerun, setAutoRerun] = useState(false);
   const [ignored, setIgnored] = useState("");
   const [ignoredSaved, setIgnoredSaved] = useState(true);
+  const [codeFolders, setCodeFolders] = useState("");
+  const [defaultFolders, setDefaultFolders] = useState("");
+  const [foldersSaved, setFoldersSaved] = useState(true);
+  const [checkouts, setCheckouts] = useState<number | null>(null);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,9 +56,20 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
       setQuietHours(s.quietHours);
       setAutoRerun(s.autoRerunFlaky);
       setIgnored(s.ignoredRepos ?? "");
+      setCodeFolders(s.codeFolders);
+      setDefaultFolders(s.defaultCodeFolders);
       // On first run, offer it ticked; it only takes effect on "Get started".
       setLaunchAtLogin(s.launchAtLogin === null ? null : welcome ? true : s.launchAtLogin);
     });
+  }, []);
+
+  const countCheckouts = () =>
+    api
+      .checkouts()
+      .then((c) => setCheckouts(Object.keys(c).length))
+      .catch(() => setCheckouts(null));
+  useEffect(() => {
+    countCheckouts();
   }, []);
 
   const run = async (id: string, fn: () => Promise<void>) => {
@@ -303,6 +318,40 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
               }
             >
               {ignoredSaved ? "Saved" : "Save"}
+            </button>
+          </div>
+        </section>
+        <section>
+          <h3>Local checkouts</h3>
+          <label className="field">
+            <span>Look for clones in</span>
+            <textarea
+              rows={3}
+              placeholder={defaultFolders.split("\n").join(", ")}
+              value={codeFolders}
+              onChange={(e) => {
+                setCodeFolders(e.target.value);
+                setFoldersSaved(false);
+              }}
+            />
+          </label>
+          <p className="hint">
+            One folder per line or comma. Pipescope looks four folders deep for git clones and matches them to repos by
+            their remotes, so a copied failure can say where the code is. Blank searches the folders shown.
+            {checkouts !== null && ` Found ${checkouts} ${checkouts === 1 ? "repo" : "repos"}.`}
+          </p>
+          <div className="row">
+            <button
+              disabled={!!busy || foldersSaved}
+              onClick={() =>
+                run("folders", async () => {
+                  await api.setCodeFolders(codeFolders);
+                  setFoldersSaved(true);
+                  await countCheckouts();
+                })
+              }
+            >
+              {foldersSaved ? "Saved" : "Save"}
             </button>
           </div>
         </section>

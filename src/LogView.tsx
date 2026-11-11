@@ -3,7 +3,9 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, errorText } from "./api";
+import { api, errorText, loadBaseline } from "./api";
+import { copyText } from "./clipboard";
+import { failureReport } from "./agentReport";
 import type { Baseline, LogTail, Run } from "./types";
 import type { LogLine } from "./model";
 import { ago, contextRows, duration, errorContext, failureSummary, headline, isActive, newLines, parseLog } from "./model";
@@ -21,19 +23,6 @@ const VERDICT: Record<Run["status"], string> = {
   cancelled: "Cancelled",
   skipped: "Skipped",
 };
-
-// The last pass rarely changes while the app runs, so each run and step is fetched once.
-const baselines = new Map<string, Promise<Baseline | null>>();
-function loadBaseline(key: string, step: string) {
-  const id = `${key}|${step}`;
-  let found = baselines.get(id);
-  if (!found) {
-    found = api.baselineLog(key, step);
-    found.catch(() => baselines.delete(id));
-    baselines.set(id, found);
-  }
-  return found;
-}
 
 function loadWrap() {
   try {
@@ -68,9 +57,10 @@ export function LogView({ run, onBack, initialStep }: Props) {
   const expanded = !onBack;
   const [log, setLog] = useState<LogTail | null>(null);
   const [step, setStep] = useState<string | undefined>(initialStep);
-  const [expandError, setExpandError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [agentCopy, setAgentCopy] = useState<"idle" | "busy" | "done">("idle");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const [mode, setMode] = useState<"all" | "errors" | "changes">("all");
@@ -232,6 +222,9 @@ export function LogView({ run, onBack, initialStep }: Props) {
       } else if (key === "j") {
         e.preventDefault();
         if (log) setMode((m) => (m === "changes" ? "all" : "changes"));
+      } else if (key === "c" && e.shiftKey) {
+        e.preventDefault();
+        copyForAgent();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -239,8 +232,8 @@ export function LogView({ run, onBack, initialStep }: Props) {
   });
 
   const expand = () => {
-    setExpandError(null);
-    api.openLogWindow(run.key, log?.stepId || step).catch((e) => setExpandError(errorText(e)));
+    setActionError(null);
+    api.openLogWindow(run.key, log?.stepId || step).catch((e) => setActionError(errorText(e)));
   };
 
   const toggleWrap = () => {
@@ -260,23 +253,29 @@ export function LogView({ run, onBack, initialStep }: Props) {
           ? contextRows(lines, (_, i) => changed.has(i))
           : []
         : lines.map((_, i) => i);
-  const copyText = () =>
+  const shownText = () =>
     filtered ? rows.map((i) => (i === null ? "…" : lines[i].text)).join("\n") : lines.map((l) => l.text).join("\n");
 
   const copy = async () => {
-    const text = copyText();
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const area = document.createElement("textarea");
-      area.value = text;
-      document.body.appendChild(area);
-      area.select();
-      document.execCommand("copy");
-      area.remove();
-    }
+    await copyText(shownText());
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  const copyForAgent = async () => {
+    if (!log || run.status !== "failed" || agentCopy === "busy") return;
+    setAgentCopy("busy");
+    setActionError(null);
+    try {
+      // Undefined, not null, while the comparison is still loading, so the report fetches it.
+      const known = baseline?.step === stepName && !baseline.error ? baseline.data : undefined;
+      await copyText(await failureReport(run, { log, baseline: known }));
+      setAgentCopy("done");
+      window.setTimeout(() => setAgentCopy("idle"), 1500);
+    } catch (e) {
+      setAgentCopy("idle");
+      setActionError(errorText(e));
+    }
   };
 
   const compareNote = () => {
@@ -350,6 +349,16 @@ export function LogView({ run, onBack, initialStep }: Props) {
         </span>
         <div className="spacer" />
         {live && <span className="live">Live</span>}
+        {run.status === "failed" && (
+          <button
+            className="text"
+            onClick={copyForAgent}
+            disabled={!log || agentCopy === "busy"}
+            title="Copy a Markdown summary of this failure for a coding agent (⇧⌘C)"
+          >
+            {agentCopy === "done" ? "Copied" : agentCopy === "busy" ? "Copying…" : "Copy for agent"}
+          </button>
+        )}
         <button className="text" onClick={() => openUrl(log?.webUrl ?? run.webUrl)} title="Open in browser">
           Open <IconExternal />
         </button>
@@ -507,7 +516,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
 
       {mode === "changes" && log && <div className="compare-note">{compareNote()}</div>}
       {error && <div className="banner error">{error}</div>}
-      {expandError && <div className="banner error">{expandError}</div>}
+      {actionError && <div className="banner error">{actionError}</div>}
       {!log && !error && (
         <div className="log-loading" aria-label="Loading log">
           {Array.from({ length: 9 }, (_, i) => (

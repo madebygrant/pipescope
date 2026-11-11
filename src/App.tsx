@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Menu } from "@tauri-apps/api/menu";
 import type { MenuItemOptions } from "@tauri-apps/api/menu";
 import { api, errorText, label } from "./api";
+import { copyText } from "./clipboard";
+import { failureReport } from "./agentReport";
 import type { PendingDeployment, ProviderStatus, Run, Settings } from "./types";
+import { repoId } from "./types";
 import type { Pending, StateFilter } from "./model";
 import { ago, buildSections, isActive, progress, settled, typicalDurations, visibleOrder } from "./model";
 import { RunRow } from "./RunRow";
@@ -19,19 +22,6 @@ import { IconClients, IconGear, IconMute, IconPin, IconRefresh, IconTag } from "
 type View = { kind: "list" } | { kind: "settings" } | { kind: "clients" } | { kind: "log"; run: Run };
 
 const pad = (n: number) => String(n).padStart(2, "0");
-
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const area = document.createElement("textarea");
-    area.value = text;
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand("copy");
-    area.remove();
-  }
-}
 
 function loadMineOnly() {
   try {
@@ -54,6 +44,8 @@ export default function App() {
   const [deployments, setDeployments] = useState<Record<string, PendingDeployment[]>>({});
   const [editingClient, setEditingClient] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
   const [now, setNow] = useState(Date.now);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showMuted, setShowMuted] = useState(false);
@@ -224,6 +216,20 @@ export default function App() {
       return Object.keys(keep).length === Object.keys(all).length ? all : keep;
     });
   }, [runs]);
+  const copyForAgent = (run: Run) =>
+    act(async () => {
+      window.clearTimeout(noticeTimer.current);
+      setNotice(`Collecting #${run.number}'s failure…`);
+      try {
+        await copyText(await failureReport(run));
+        setNotice(`Copied #${run.number}'s failure for an agent.`);
+        noticeTimer.current = window.setTimeout(() => setNotice(null), 3000);
+      } catch (e) {
+        setNotice(null);
+        throw e;
+      }
+    });
+
   const canRerun = (run: Run) => !isActive(run) && run.status !== "waiting" && !pending[run.key];
 
   // Every action for a run, including the ones its two row icons leave out.
@@ -234,6 +240,7 @@ export default function App() {
     const approvable = deployments[run.key]?.some((d) => d.canApprove) ?? false;
     const busy = !!pending[run.key];
     const ask = (action: Confirm) => () => setConfirm({ key: run.key, action });
+    const checkout = (await api.checkouts().catch(() => ({}) as Record<string, string>))[repoId(run).toLowerCase()];
     const groups: MenuItemOptions[][] = [
       [
         { text: "Open in Browser", accelerator: "Enter", action: () => openUrl(run.webUrl) },
@@ -267,7 +274,13 @@ export default function App() {
           : []),
         ...(isActive(run) ? [{ text: "Cancel Run…", accelerator: "CmdOrCtrl+.", enabled: !busy, action: ask("cancel") }] : []),
       ],
-      [{ text: "Copy Link", action: () => copyText(run.webUrl) }],
+      [
+        ...(run.status === "failed"
+          ? [{ text: "Copy Failure for Agent", accelerator: "CmdOrCtrl+Shift+C", action: () => copyForAgent(run) }]
+          : []),
+        { text: "Copy Link", action: () => copyText(run.webUrl) },
+      ],
+      checkout ? [{ text: "Show Checkout in Finder", action: () => act(() => revealItemInDir(checkout)) }] : [],
     ];
     const items = groups
       .filter((g) => g.length)
@@ -313,6 +326,9 @@ export default function App() {
           const failedOnly = selected.provider === "github" && selected.status === "failed" && !e.shiftKey;
           rerun(selected, failedOnly);
         }
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        if (selected?.status === "failed") copyForAgent(selected);
       } else if (mod && e.key.toLowerCase() === "l") {
         e.preventDefault();
         if (selected) setView({ kind: "log", run: selected });
@@ -500,6 +516,11 @@ export default function App() {
           {w}
         </button>
       ))}
+      {notice && !error && (
+        <div className="banner" role="status" onClick={() => setNotice(null)}>
+          {notice}
+        </div>
+      )}
       {error && (
         <div className="banner error" onClick={() => setError(null)}>
           {error}

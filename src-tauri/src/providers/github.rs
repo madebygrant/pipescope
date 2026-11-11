@@ -9,7 +9,7 @@ use url::Url;
 use super::{split_repo, tail_log};
 use crate::error::Result;
 use crate::http::{Api, Auth, Fetched};
-use crate::model::{LogStep, LogTail, PendingDeployment, ProviderKind, RateInfo, Repo, Run, RunStatus, StepPick, run_key};
+use crate::model::{ChangedFile, LogStep, LogTail, PendingDeployment, ProviderKind, RateInfo, Repo, Run, RunStatus, StepPick, run_key};
 
 const API: &str = "https://api.github.com/";
 
@@ -32,6 +32,19 @@ struct Me {
     login: String,
     id: u64,
     email: Option<String>,
+}
+
+// Both the compare and commit endpoints list files this way, up to 300 of them.
+#[derive(Deserialize)]
+struct Diff {
+    #[serde(default)]
+    files: Vec<DiffFile>,
+}
+
+#[derive(Deserialize)]
+struct DiffFile {
+    filename: String,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -265,6 +278,17 @@ impl GitHub {
         self.api
             .post(self.api.url(&["repos", owner, name, "actions", "runs", &run.id, "pending_deployments"]), Some(&body))
             .await
+    }
+
+    // Three dots compares from where the branches diverged, so commits only on the base don't count.
+    pub async fn changed_files(&self, repo: &str, base: Option<&str>, head: &str) -> Result<Vec<ChangedFile>> {
+        let (owner, name) = split_repo(repo)?;
+        let url = match base {
+            Some(base) => self.api.url(&["repos", owner, name, "compare", &format!("{base}...{head}")]),
+            None => self.api.url(&["repos", owner, name, "commits", head]),
+        };
+        let diff: Diff = self.api.get(url).await?;
+        Ok(diff.files.into_iter().map(|f| ChangedFile { path: f.filename, status: f.status }).collect())
     }
 
     pub async fn log_tail(&self, run: &Run, step: StepPick<'_>) -> Result<LogTail> {
