@@ -76,8 +76,8 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
     <div className="app">
       <header className="bar">
         {!welcome && (
-          <button className="icon" title="Back (esc)" aria-label="Back" onClick={onBack}>
-            <IconBack />
+          <button className="back" title="Back (esc)" onClick={onBack}>
+            <IconBack /> Runs
           </button>
         )}
         <strong>{welcome ? "Welcome to Pipescope" : "Settings"}</strong>

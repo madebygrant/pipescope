@@ -18,9 +18,7 @@
   --band-muted: #a09c94;
   --sel-bg: #111111;
   --sel-text: #f4f2ee;
-  --sel-muted: #bdb8ae;
   --sel-red: #ff4a3d;
-  --sel-green: #5bc26b;
   --hover: rgb(0 0 0 / 0.04);
   --banner: #ece4d1;
   --banner-error: #f5d9d4;
@@ -51,9 +49,7 @@
   --band-muted: #9a958c;
   --sel-bg: #edebe6;
   --sel-text: #111111;
-  --sel-muted: #4a463f;
   --sel-red: #c21a0e;
-  --sel-green: #2f7d3a;
   --hover: rgb(255 255 255 / 0.05);
   --banner: #2e2718;
   --banner-error: #3a1a17;
@@ -161,23 +157,34 @@ select:focus-visible {
 
 .bar .text,
 .back {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 0;
+  height: 24px;
+  border: 1px solid var(--band-text);
   background: none;
-  padding: 4px 2px;
+  padding: 0 8px;
   font-weight: 700;
+  letter-spacing: inherit;
+  text-transform: inherit;
 }
 
 .back {
-  margin-left: -6px;
+  margin-left: -8px;
+  padding-left: 4px;
+  background: var(--band-text);
+  color: var(--band);
 }
 
-.bar .text:hover,
+.bar .text:hover {
+  background: var(--band-text);
+  color: var(--band);
+}
+
 .back:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  background: var(--band-muted);
+  border-color: var(--band-muted);
 }
 
 .crumb {
@@ -512,23 +519,58 @@ button.banner::after {
 }
 
 .run {
-  --row-bg: var(--bg);
   --line3: 26px;
   position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 5px 14px;
+  padding: 5px 8px 5px 14px;
 }
 
-.run:hover {
-  background: var(--hover);
+.run.selected::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 13px;
+  width: 6px;
+  height: 6px;
+  background: var(--text);
 }
 
-.run.selected {
-  --row-bg: var(--sel-bg);
-  background: var(--sel-bg);
-  color: var(--sel-text);
+.row-icons {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  margin-top: -3px;
+}
+
+.row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+
+.row-icon:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.row-icon.danger {
+  color: var(--red-text);
+}
+
+.row-icon.on {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.row-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .run-num {
@@ -561,14 +603,6 @@ button.banner::after {
 .run.running .run-num,
 .run.waiting .run-num {
   color: var(--text);
-}
-
-.run.selected .run-num {
-  color: var(--sel-text);
-}
-
-.run.selected.failed .run-num {
-  color: var(--sel-red);
 }
 
 .run-main {
@@ -630,24 +664,6 @@ button.banner::after {
   color: var(--text);
 }
 
-.run.selected .run-meta,
-.run.selected .run-state {
-  color: var(--sel-muted);
-}
-
-.run.selected .run-state.failed {
-  color: var(--sel-red);
-}
-
-.run.selected .run-state.success {
-  color: var(--sel-green);
-}
-
-.run.selected .run-state.waiting,
-.run.selected .run-state.pending {
-  color: var(--sel-text);
-}
-
 .run-state.pending {
   display: inline-flex;
   align-items: center;
@@ -684,26 +700,6 @@ button.banner::after {
   font-size: 11px;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
-}
-
-.run.selected .track {
-  background: color-mix(in srgb, var(--sel-text) 25%, transparent);
-}
-
-.run.selected .track .fill {
-  background: var(--sel-text);
-}
-
-.run.selected .track.queued {
-  background: repeating-linear-gradient(90deg, var(--sel-muted) 0 4px, transparent 4px 8px);
-}
-
-.badge.watched {
-  display: inline-flex;
-  vertical-align: -1px;
-  margin-left: 6px;
-  color: inherit;
-  opacity: 0.7;
 }
 
 .mini-spin {
@@ -764,24 +760,14 @@ button.banner::after {
 }
 
 .actions button.primary {
-  border-color: var(--sel-red);
-  background: var(--sel-red);
-  color: var(--sel-bg);
-}
-
-.run:not(.selected) .actions button.primary {
   border-color: var(--red);
   background: var(--red);
   color: var(--bg);
 }
 
-.actions button.open-log {
-  margin-left: auto;
-}
-
 .actions button.danger {
-  border-color: var(--sel-red);
-  color: var(--sel-red);
+  border-color: var(--red);
+  color: var(--red-text);
 }
 
 .actions.confirm {

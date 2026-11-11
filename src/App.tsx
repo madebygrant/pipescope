@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Menu } from "@tauri-apps/api/menu";
+import type { MenuItemOptions } from "@tauri-apps/api/menu";
 import { api, errorText, label } from "./api";
 import type { PendingDeployment, ProviderStatus, Run, Settings } from "./types";
 import type { Pending, StateFilter } from "./model";
@@ -16,6 +18,19 @@ import { IconClients, IconGear, IconMute, IconPin, IconRefresh, IconTag } from "
 type View = { kind: "list" } | { kind: "settings" } | { kind: "clients" } | { kind: "log"; run: Run };
 
 const pad = (n: number) => String(n).padStart(2, "0");
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+}
 
 function loadMineOnly() {
   try {
@@ -182,18 +197,26 @@ export default function App() {
       await loadSettings();
     });
 
-  // Who can approve is only known by asking, so look it up when a waiting GitHub run is selected.
+  // Who can approve is only known by asking. Rows show approve icons unselected, so ask for every
+  // visible waiting GitHub run; `asked` stops the per-second re-render from asking again mid-request.
+  const asked = useRef(new Set<string>());
   useEffect(() => {
-    if (!selected || selected.status !== "waiting" || selected.provider !== "github" || selected.key in deployments) return;
-    const key = selected.key;
-    api
-      .pendingDeployments(key)
-      .then((d) => setDeployments((all) => ({ ...all, [key]: d })))
-      .catch(() => setDeployments((all) => ({ ...all, [key]: [] })));
-  }, [selected, deployments]);
+    for (const run of order) {
+      if (run.status !== "waiting" || run.provider !== "github" || asked.current.has(run.key)) continue;
+      const key = run.key;
+      asked.current.add(key);
+      api
+        .pendingDeployments(key)
+        .then((d) => setDeployments((all) => ({ ...all, [key]: d })))
+        .catch(() => setDeployments((all) => ({ ...all, [key]: [] })));
+    }
+  }, [order]);
 
   // Drop lookups for runs that have moved on, so a later wait is looked up afresh.
   useEffect(() => {
+    for (const key of asked.current) {
+      if (!runs.some((r) => r.key === key && r.status === "waiting")) asked.current.delete(key);
+    }
     setDeployments((all) => {
       const keep = Object.fromEntries(
         Object.entries(all).filter(([key]) => runs.some((r) => r.key === key && r.status === "waiting")),
@@ -202,6 +225,60 @@ export default function App() {
     });
   }, [runs]);
   const canRerun = (run: Run) => !isActive(run) && run.status !== "waiting" && !pending[run.key];
+
+  // Every action for a run, including the ones its two row icons leave out.
+  const showRunMenu = async (run: Run) => {
+    setSelectedKey(run.key);
+    const finished = !isActive(run) && run.status !== "waiting";
+    const failedOnGithub = run.status === "failed" && run.provider === "github";
+    const approvable = deployments[run.key]?.some((d) => d.canApprove) ?? false;
+    const busy = !!pending[run.key];
+    const ask = (action: Confirm) => () => setConfirm({ key: run.key, action });
+    const groups: MenuItemOptions[][] = [
+      [
+        { text: "Open in Browser", accelerator: "Enter", action: () => openUrl(run.webUrl) },
+        { text: "Show Log", accelerator: "CmdOrCtrl+L", action: () => setView({ kind: "log", run }) },
+      ],
+      [
+        ...(approvable
+          ? [
+              { text: "Approve Deployment…", enabled: !busy, action: ask("approve") },
+              { text: "Reject Deployment…", enabled: !busy, action: ask("reject") },
+            ]
+          : []),
+        ...(run.status === "waiting" && run.provider === "bitbucket"
+          ? [{ text: "Open Manual Step", action: () => openStep(run) }]
+          : []),
+        ...(failedOnGithub
+          ? [{ text: "Re-run Failed Jobs", accelerator: "CmdOrCtrl+R", enabled: canRerun(run), action: () => rerun(run, true) }]
+          : []),
+        ...(finished
+          ? [
+              {
+                text: run.provider === "bitbucket" ? "Run Pipeline Again" : "Re-run All Jobs",
+                accelerator: failedOnGithub ? "CmdOrCtrl+Shift+R" : "CmdOrCtrl+R",
+                enabled: canRerun(run),
+                action: () => rerun(run, false),
+              },
+            ]
+          : []),
+        ...(!finished
+          ? [{ text: run.watched ? "Stop Watching" : "Notify When Finished", accelerator: "CmdOrCtrl+D", action: () => toggleWatch(run) }]
+          : []),
+        ...(isActive(run) ? [{ text: "Cancel Run…", accelerator: "CmdOrCtrl+.", enabled: !busy, action: ask("cancel") }] : []),
+      ],
+      [{ text: "Copy Link", action: () => copyText(run.webUrl) }],
+    ];
+    const items = groups
+      .filter((g) => g.length)
+      .flatMap((g, i) => (i ? [{ item: "Separator" as const }, ...g] : g));
+    try {
+      const menu = await Menu.new({ items });
+      await menu.popup();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -318,6 +395,10 @@ export default function App() {
       onDismiss={() => setConfirm(null)}
       onWatch={() => toggleWatch(run)}
       onOpenStep={() => openStep(run)}
+      onMenu={(e) => {
+        e.preventDefault();
+        showRunMenu(run);
+      }}
     />
   );
 
