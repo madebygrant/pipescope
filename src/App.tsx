@@ -5,15 +5,17 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, label } from "./api";
 import type { PendingDeployment, ProviderStatus, Run, Settings } from "./types";
 import type { Pending, StateFilter } from "./model";
-import { ago, buildSections, isActive, settled, visibleOrder } from "./model";
+import { ago, buildSections, isActive, progress, settled, typicalDurations, visibleOrder } from "./model";
 import { RunRow } from "./RunRow";
 import type { Confirm } from "./RunRow";
 import { ClientsView } from "./ClientsView";
 import { SettingsView } from "./SettingsView";
 import { LogView } from "./LogView";
-import { IconClients, IconGear, IconMute, IconPin, IconRefresh, IconSearch, IconTag } from "./icons";
+import { IconClients, IconGear, IconMute, IconPin, IconRefresh, IconTag } from "./icons";
 
 type View = { kind: "list" } | { kind: "settings" } | { kind: "clients" } | { kind: "log"; run: Run };
+
+const pad = (n: number) => String(n).padStart(2, "0");
 
 function loadMineOnly() {
   try {
@@ -99,6 +101,7 @@ export default function App() {
     [runs, mineOnly, query, now, flags],
   );
   const order = useMemo(() => visibleOrder(sections, filter), [sections, filter]);
+  const typical = useMemo(() => typicalDurations(runs), [runs]);
   const selected = order.find((r) => r.key === selectedKey) ?? order[0];
 
   // Tick every second while something is running so elapsed times stay live.
@@ -301,6 +304,7 @@ export default function App() {
       run={run}
       now={now}
       showRepo={showRepo}
+      progress={isActive(run) ? progress(run, now, typical) : undefined}
       selected={selected?.key === run.key}
       pending={pending[run.key]}
       confirming={confirm?.key === run.key ? confirm.action : null}
@@ -318,34 +322,22 @@ export default function App() {
   );
 
   const empty = order.length === 0;
+  const showFailing = filter !== "running" && sections.failing.length > 0;
+  const showRunning = filter !== "failing" && sections.running.length > 0;
+  const firstRepoSection = 1 + Number(showFailing) + Number(showRunning);
   return (
     <div className="app">
       <header className="bar">
-        <label className="search">
-          <IconSearch />
-          <input
-            ref={searchRef}
-            autoFocus
-            value={query}
-            placeholder="Filter repos, branches…"
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSelectedKey(null);
-            }}
-            aria-label="Filter runs"
-          />
-        </label>
-        <div className="segmented" role="group" aria-label="Show runs">
-          <button className={mineOnly ? "on" : ""} onClick={() => toggleMine(true)}>
+        <span className="brand">Pipescope</span>
+        <div className="spacer" />
+        <div className="who" role="group" aria-label="Show runs">
+          <button className={mineOnly ? "on" : ""} aria-pressed={mineOnly} onClick={() => toggleMine(true)}>
             Mine
           </button>
-          <button className={mineOnly ? "" : "on"} onClick={() => toggleMine(false)}>
+          <button className={mineOnly ? "" : "on"} aria-pressed={!mineOnly} onClick={() => toggleMine(false)}>
             All
           </button>
         </div>
-        <button className="icon" title="Refresh" aria-label="Refresh" onClick={() => act(api.refresh)}>
-          <IconRefresh />
-        </button>
         <button className="icon" title="Clients" aria-label="Clients" onClick={() => setView({ kind: "clients" })}>
           <IconClients />
         </button>
@@ -354,24 +346,57 @@ export default function App() {
         </button>
       </header>
 
-      <nav className="summary" aria-label="Status filters">
-        {sections.failing.length > 0 ? (
-          <button className={`chip failed${filter === "failing" ? " on" : ""}`} onClick={() => toggleFilter("failing")}>
-            {sections.failing.length} failing
-          </button>
-        ) : (
-          <span className="chip ok">Nothing failing</span>
-        )}
-        {sections.running.length > 0 && (
-          <button className={`chip running${filter === "running" ? " on" : ""}`} onClick={() => toggleFilter("running")}>
-            {sections.running.length} running
-          </button>
-        )}
-        <span className="chip muted">{sections.passing} passing</span>
-        <span className={`freshness${offline ? " offline" : ""}`}>
-          {offline ? "Offline" : lastPoll ? `Updated ${ago(lastPoll, now)}` : ""}
-        </span>
+      <nav className="counts" aria-label="Status filters">
+        <button
+          className={`count failing${filter === "failing" ? " on" : ""}`}
+          onClick={() => toggleFilter("failing")}
+          disabled={!sections.failing.length && filter !== "failing"}
+          aria-pressed={filter === "failing"}
+          title="Show only failing runs"
+        >
+          <span className="count-n">{pad(sections.failing.length)}</span>
+          <span className="count-label">Failing</span>
+        </button>
+        <button
+          className={`count running${filter === "running" ? " on" : ""}`}
+          onClick={() => toggleFilter("running")}
+          disabled={!sections.running.length && filter !== "running"}
+          aria-pressed={filter === "running"}
+          title="Show only running runs"
+        >
+          <span className="count-n">{pad(sections.running.length)}</span>
+          <span className="count-label">Running</span>
+        </button>
+        <div className="count passed">
+          <span className="count-n">{pad(sections.passing)}</span>
+          <span className="count-label">Passed</span>
+        </div>
       </nav>
+
+      <div className="filter">
+        <label>
+          <span className="filter-label">Filter</span>
+          <input
+            ref={searchRef}
+            autoFocus
+            value={query}
+            placeholder="repo, branch, author"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedKey(null);
+            }}
+            aria-label="Filter runs"
+          />
+        </label>
+        <button
+          className={`freshness${offline ? " offline" : ""}`}
+          title={lastPoll ? `Updated ${ago(lastPoll, now)}. Refresh now` : "Refresh now"}
+          onClick={() => act(api.refresh)}
+        >
+          <IconRefresh />
+          {offline ? "Offline" : lastPoll ? ago(lastPoll, now) : "Refresh"}
+        </button>
+      </div>
 
       {needsSetup.length > 0 && (
         <button className="banner" onClick={() => setView({ kind: "settings" })}>
@@ -411,26 +436,31 @@ export default function App() {
                     : "No runs in the last 7 days."}
           </p>
         )}
-        {filter !== "running" && sections.failing.length > 0 && (
+        {showFailing && (
           <section className="group attention">
             <h2>
-              Needs attention <span className="section-count">{sections.failing.length}</span>
+              <span className="sec-n">{pad(1)}</span>
+              Needs attention
+              <span className="rule" />
             </h2>
             {sections.failing.map((r) => row(r, true))}
           </section>
         )}
-        {filter !== "failing" && sections.running.length > 0 && (
-          <section className="group">
+        {showRunning && (
+          <section className="group running">
             <h2>
-              Running <span className="section-count">{sections.running.length}</span>
+              <span className="sec-n">{pad(showFailing ? 2 : 1)}</span>
+              Running
+              <span className="rule" />
             </h2>
             {sections.running.map((r) => row(r, true))}
           </section>
         )}
         {filter === "all" &&
-          sections.groups.map((g) => (
+          sections.groups.map((g, i) => (
             <section key={g.id} className={`group${g.muted ? " is-muted" : ""}`}>
               <h2>
+                <span className="sec-n">{pad(firstRepoSection + i)}</span>
                 <span className={`provider ${g.provider}`}>{g.provider === "github" ? "GH" : "BB"}</span>
                 <span className="repo-name">{g.repo}</span>
                 {editingClient === g.id ? (
@@ -458,6 +488,8 @@ export default function App() {
                 ) : (
                   settings?.clients[g.id] && <span className="client-chip">{settings.clients[g.id]}</span>
                 )}
+                {g.pinned && <span className="pinned-label">Pinned</span>}
+                <span className="rule" />
                 <span className="repo-tools">
                   <button
                     title="Set the client"

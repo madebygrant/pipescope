@@ -1,5 +1,112 @@
 import { describe, expect, it } from "vitest";
-import { contextRows, errorContext, formatSecs, isErrorLine, newLines, normaliseLine, parseLog } from "./model";
+import {
+  clock,
+  contextRows,
+  errorContext,
+  failureSummary,
+  formatSecs,
+  isErrorLine,
+  newLines,
+  normaliseLine,
+  parseLog,
+  progress,
+  typicalDurations,
+} from "./model";
+import type { Run } from "./types";
+
+const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
+function run(status: Run["status"], start: number, end: number, extra: Partial<Run> = {}): Run {
+  return {
+    key: `k${start}`,
+    provider: "github",
+    repo: "acme/web",
+    id: "1",
+    number: 1,
+    title: "CI",
+    subtitle: null,
+    branch: "main",
+    commit: null,
+    status,
+    actor: null,
+    mine: true,
+    createdAt: at(start),
+    startedAt: at(start),
+    updatedAt: at(end),
+    webUrl: "",
+    author: null,
+    buildSecs: null,
+    flaky: false,
+    flakyWorkflow: false,
+    watched: false,
+    ...extra,
+  };
+}
+
+describe("estimating how long a run takes", () => {
+  it("takes the median of recent passes, across branches, ignoring failures", () => {
+    const runs = [run("success", 50, 54), run("failed", 40, 41), run("success", 30, 33, { branch: "feat" }), run("success", 20, 25)];
+    expect(typicalDurations(runs).get("github|acme/web|CI")).toBe(4 * 60_000);
+    expect(typicalDurations([run("success", 0, 2), run("success", 10, 14)]).get("github|acme/web|CI")).toBe(3 * 60_000);
+  });
+
+  it("gives a fraction only for running runs with an estimate", () => {
+    const typical = typicalDurations([run("success", 0, 4)]);
+    const now = Date.parse(at(62));
+    expect(progress(run("running", 60, 60), now, typical)).toEqual({ elapsed: 120_000, typical: 240_000, fraction: 0.5 });
+    expect(progress(run("running", 50, 50), now, typical).fraction).toBe(1);
+    expect(progress(run("queued", 61, 61), now, typical).fraction).toBeNull();
+    expect(progress(run("running", 60, 60, { title: "Other" }), now, typical).fraction).toBeNull();
+  });
+
+  it("formats a timer", () => {
+    expect(clock(125_000)).toBe("2:05");
+    expect(clock(3_725_000)).toBe("1:02:05");
+  });
+});
+
+describe("failureSummary", () => {
+  it("reads Jest output", () => {
+    const { lines } = parseLog(
+      [
+        "FAIL src/login.test.ts",
+        "  ● login › rejects a bad password",
+        "    expect(received).toBe(expected)",
+        "    Expected: 401",
+        "    Received: 500",
+        "      at Object.<anonymous> (node_modules/jest/x.js:1:1)",
+        "      at Object.<anonymous> (src/login.test.ts:40:5)",
+      ].join("\n"),
+    );
+    expect(failureSummary(lines)).toEqual({
+      n: 4,
+      test: "login › rejects a bad password",
+      expected: "401",
+      received: "500",
+      location: "src/login.test.ts:40",
+    });
+  });
+
+  it("reads Vitest output", () => {
+    const { lines } = parseLog(
+      [" FAIL  src/cart.test.ts > cart > totals", "AssertionError: expected 3 to be 4", "- Expected: 4", "Expected: 4", "Received: 3", " ❯ src/cart.test.ts:12:20"].join("\n"),
+    );
+    expect(failureSummary(lines)).toMatchObject({
+      test: "cart › totals",
+      expected: "4",
+      received: "3",
+      location: "src/cart.test.ts:12",
+    });
+  });
+
+  it("reads Jest's qualified labels", () => {
+    const { lines } = parseLog(["  ● list › has three", "    Expected length: 3", "    Received length: 2"].join("\n"));
+    expect(failureSummary(lines)).toMatchObject({ test: "list › has three", expected: "3", received: "2" });
+  });
+
+  it("finds nothing in other logs", () => {
+    expect(failureSummary(parseLog("error: build failed\nExpected: 1").lines)).toBeNull();
+  });
+});
 
 describe("isErrorLine", () => {
   it("flags failures", () => {

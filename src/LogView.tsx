@@ -6,11 +6,34 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./api";
 import type { Baseline, LogTail, Run } from "./types";
 import type { LogLine } from "./model";
-import { ago, contextRows, errorContext, isActive, newLines, parseLog } from "./model";
-import { IconBack, IconChevron, IconCopy, IconExpand, IconExternal, IconSearch, IconWrap, StatusIcon } from "./icons";
+import { ago, contextRows, duration, errorContext, failureSummary, headline, isActive, newLines, parseLog } from "./model";
+import { IconBack, IconChevron, IconCopy, IconExpand, IconExternal, IconWrap } from "./icons";
 
 // GitHub only serves a job's log once it finishes, so its refresh just watches for that.
 const LIVE_REFRESH_MS = { github: 15_000, bitbucket: 5_000 };
+
+const VERDICT: Record<Run["status"], string> = {
+  failed: "Fail",
+  success: "Pass",
+  running: "Running",
+  queued: "Queued",
+  waiting: "Waiting",
+  cancelled: "Cancelled",
+  skipped: "Skipped",
+};
+
+// The last pass rarely changes while the app runs, so each run and step is fetched once.
+const baselines = new Map<string, Promise<Baseline | null>>();
+function loadBaseline(key: string, step: string) {
+  const id = `${key}|${step}`;
+  let found = baselines.get(id);
+  if (!found) {
+    found = api.baselineLog(key, step);
+    found.catch(() => baselines.delete(id));
+    baselines.set(id, found);
+  }
+  return found;
+}
 
 function loadWrap() {
   try {
@@ -62,6 +85,12 @@ export function LogView({ run, onBack, initialStep }: Props) {
   const stickToBottom = useRef(false);
   const fetchLog = useRef(() => {});
   const live = isActive(run);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!live) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [live]);
   const lastLive = useRef({ key: run.key, live });
 
   useEffect(() => {
@@ -105,6 +134,8 @@ export function LogView({ run, onBack, initialStep }: Props) {
 
   const parsed = useMemo(() => parseLog(log?.text ?? ""), [log]);
   const { lines, groups } = parsed;
+  // A passed run's log can still hold an earlier attempt's failure.
+  const summary = useMemo(() => (run.status === "failed" ? failureSummary(lines) : null), [lines, run.status]);
   const q = query.trim();
 
   // Groups start collapsed unless they hold an error; a click flips that default.
@@ -125,12 +156,13 @@ export function LogView({ run, onBack, initialStep }: Props) {
   }, [errorCount, mode]);
 
   const stepName = log?.step ?? "";
-  const loadingBaseline = mode === "changes" && !!log && baseline?.step !== stepName;
+  // A failed run's new-line count shows up front, so its comparison loads without asking.
+  const wantBaseline = mode === "changes" || run.status === "failed";
+  const loadingBaseline = wantBaseline && !!log && baseline?.step !== stepName;
   useEffect(() => {
     if (!loadingBaseline) return;
     let stop = false;
-    api
-      .baselineLog(run.key, stepName)
+    loadBaseline(run.key, stepName)
       .then((data) => !stop && setBaseline({ step: stepName, data }))
       .catch((e) => !stop && setBaseline({ step: stepName, data: null, error: errorText(e) }));
     return () => {
@@ -303,26 +335,21 @@ export function LogView({ run, onBack, initialStep }: Props) {
     </div>
   );
 
-  const stepInfo = log?.steps.find((s) => s.id === log.stepId);
   const navLabel = q ? (targets.length ? `${Math.min(cursor, targets.length - 1) + 1}/${targets.length}` : "0/0") : null;
 
   return (
     <div className={`app${expanded ? " expanded" : ""}`}>
       <header className="bar">
         {onBack && (
-          <button className="icon" title="Back (esc)" aria-label="Back" onClick={onBack}>
-            <IconBack />
+          <button className="back" title="Back (esc)" onClick={onBack}>
+            <IconBack /> Runs
           </button>
         )}
-        <StatusIcon status={run.status} />
-        <div className="log-title">
-          <strong>
-            {run.title} <span className="num">#{run.number}</span>
-          </strong>
-          <span>{[run.repo, run.branch].filter(Boolean).join(" · ")}</span>
-        </div>
+        <span className="crumb">
+          {run.repo} / {run.title} / #{run.number}
+        </span>
         <div className="spacer" />
-        {live && <span className="live-pill">Live</span>}
+        {live && <span className="live">Live</span>}
         <button className="text" onClick={() => openUrl(log?.webUrl ?? run.webUrl)} title="Open in browser">
           Open <IconExternal />
         </button>
@@ -333,10 +360,79 @@ export function LogView({ run, onBack, initialStep }: Props) {
         )}
       </header>
 
+      <div className="hero">
+        <div className="hero-main">
+          <div className={`verdict ${run.status}${VERDICT[run.status].length > 5 ? " long" : ""}`}>{VERDICT[run.status]}</div>
+          <div className="hero-title">{headline(run)}</div>
+          <div className="hero-meta">{[run.branch, duration(run, now)].filter(Boolean).join(" · ")}</div>
+        </div>
+        <div className="tiles">
+          <div className={`tile${errorCount ? "" : " empty"}`}>
+            <span className="tile-n">
+              {errorCount && !q ? (
+                <>
+                  {Math.min(cursor, targets.length - 1) + 1}
+                  <span className="of">/{errorCount}</span>
+                </>
+              ) : (
+                errorCount
+              )}
+            </span>
+            <span className="tile-label">
+              {errorCount === 1 ? "Error" : "Errors"}
+              {errorCount > 0 && (
+                <span className="tile-nav">
+                  <button onClick={() => jump(-1)} title="Previous error (⇧⌘G)" aria-label="Previous error" disabled={!!q}>
+                    <IconChevron dir="up" />
+                  </button>
+                  <button onClick={() => jump(1)} title="Next error (⌘G)" aria-label="Next error" disabled={!!q}>
+                    <IconChevron dir="down" />
+                  </button>
+                </span>
+              )}
+            </span>
+          </div>
+          <button
+            className={`tile${mode === "changes" ? " on" : ""}`}
+            onClick={() => setMode((m) => (m === "changes" ? "all" : "changes"))}
+            disabled={!log}
+            aria-pressed={mode === "changes"}
+            title="Show only lines that weren't in the last passing run (⌘J)"
+          >
+            <span className="tile-n">{changed ? `+${changed.size}` : "–"}</span>
+            <span className="tile-label">
+              {baseLog && baseline?.data ? `New vs #${baseline.data.run.number}` : loadingBaseline ? "Comparing…" : "New lines"}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {summary && (
+        <div className="failure">
+          <div>
+            <span className="failure-label">Expected</span>
+            <span className={`failure-value${summary.expected.length > 10 ? " long" : ""}`} title={summary.expected}>
+              {summary.expected}
+            </span>
+          </div>
+          <div className="received">
+            <span className="failure-label">Received</span>
+            <span className={`failure-value${summary.received.length > 10 ? " long" : ""}`} title={summary.received}>
+              {summary.received}
+            </span>
+          </div>
+          {(summary.test || summary.location) && (
+            <button className="failure-where" onClick={() => reveal(summary.n)} title="Go to this failure">
+              {[summary.test, summary.location].filter(Boolean).join(" · ")}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="log-tools">
         {log && log.steps.length > 1 ? (
           <label className="step-pick">
-            <StatusIcon status={stepInfo?.status ?? "skipped"} />
+            <span>Step</span>
             <select value={log.stepId} onChange={(e) => setStep(e.target.value)} aria-label="Step">
               {log.steps.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -350,42 +446,6 @@ export function LogView({ run, onBack, initialStep }: Props) {
           <span className="step-name">{log?.step}</span>
         )}
         <div className="spacer" />
-        {errorCount > 0 && (
-          <div className="error-nav" role="group" aria-label="Errors">
-            <button onClick={() => jump(-1)} title="Previous error (⇧⌘G)" aria-label="Previous error" disabled={!!q}>
-              <IconChevron dir="up" />
-            </button>
-            <span>
-              {q ? `${errorCount} ${errorCount === 1 ? "error" : "errors"}` : `Error ${Math.min(cursor, targets.length - 1) + 1} of ${errorCount}`}
-            </span>
-            <button onClick={() => jump(1)} title="Next error (⌘G)" aria-label="Next error" disabled={!!q}>
-              <IconChevron dir="down" />
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="log-tools find-row">
-        <label className="find">
-          <IconSearch />
-          <input
-            ref={findRef}
-            value={query}
-            placeholder="Find in log"
-            aria-label="Find in log"
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                jump(e.shiftKey ? -1 : 1);
-              } else if (e.key === "Escape" && query) {
-                e.stopPropagation();
-                setQuery("");
-              }
-            }}
-          />
-          {navLabel && <span className="find-count">{navLabel}</span>}
-        </label>
         <button
           className={`tool${mode === "errors" ? " on" : ""}`}
           onClick={() => setMode((m) => (m === "errors" ? "all" : "errors"))}
@@ -404,7 +464,7 @@ export function LogView({ run, onBack, initialStep }: Props) {
         >
           Changes
         </button>
-        <button className={`tool icon-only${wrap ? " on" : ""}`} onClick={toggleWrap} title="Wrap long lines" aria-pressed={wrap}>
+        <button className={`tool icon-only${wrap ? " on" : ""}`} onClick={toggleWrap} title="Wrap long lines" aria-label="Wrap long lines" aria-pressed={wrap}>
           <IconWrap />
         </button>
         <button
@@ -416,6 +476,29 @@ export function LogView({ run, onBack, initialStep }: Props) {
         >
           {copied ? "✓" : <IconCopy />}
         </button>
+      </div>
+
+      <div className="log-tools find-row">
+        <label className="find">
+          <span className="find-label">Find</span>
+          <input
+            ref={findRef}
+            value={query}
+            placeholder="Find in log"
+            aria-label="Find in log"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                jump(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Escape" && query) {
+                e.stopPropagation();
+                setQuery("");
+              }
+            }}
+          />
+          {navLabel && <span className="find-count">{navLabel}</span>}
+        </label>
       </div>
 
       {mode === "changes" && log && <div className="compare-note">{compareNote()}</div>}

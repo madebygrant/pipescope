@@ -3,6 +3,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./api";
 import { IconBack } from "./icons";
 import type { ProviderStatus } from "./types";
+import type { Theme } from "./theme";
+import { loadTheme, saveTheme } from "./theme";
 
 const GITHUB_TOKEN_URL = "https://github.com/settings/tokens/new?scopes=repo&description=Pipescope";
 const ATLASSIAN_TOKEN_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
@@ -35,6 +37,7 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
   const [quietHours, setQuietHours] = useState("");
   const [rulesSaved, setRulesSaved] = useState(true);
   const [autoRerun, setAutoRerun] = useState(false);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -224,6 +227,24 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
             Only for runs you'd be notified about. You're only told about the failure if the re-run fails too. Uses
             build minutes.
           </p>
+        </section>
+        <section>
+          <h3>Appearance</h3>
+          <div className="choice" role="group" aria-label="Appearance">
+            {(["system", "light", "dark"] as const).map((t) => (
+              <button
+                key={t}
+                className={theme === t ? "on" : ""}
+                aria-pressed={theme === t}
+                onClick={() => {
+                  setTheme(t);
+                  saveTheme(t);
+                }}
+              >
+                {{ system: "Match macOS", light: "Light", dark: "Dark" }[t]}
+              </button>
+            ))}
+          </div>
         </section>
         <section>
           <h3>Startup</h3>
