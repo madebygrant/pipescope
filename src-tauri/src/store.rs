@@ -236,6 +236,31 @@ impl Store {
         self.prune_watched()
     }
 
+    // Build time and client names are kept: the time was really spent, and the clients view totals it by month.
+    pub fn forget_repos(&self, ignored: impl Fn(&str) -> bool) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let repos: Vec<(String, String)> = tx
+            .prepare("SELECT provider, repo FROM polled_repos UNION SELECT provider, repo FROM runs")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (provider, repo) in repos.iter().filter(|(_, repo)| ignored(repo)) {
+            tx.execute("DELETE FROM runs WHERE provider = ?1 AND repo = ?2", params![provider, repo])?;
+            tx.execute("DELETE FROM polled_repos WHERE provider = ?1 AND repo = ?2", params![provider, repo])?;
+        }
+        for flag in ["muted", "pinned"] {
+            let mut ids: Vec<String> = self.repo_flags(flag).into_iter().collect();
+            let before = ids.len();
+            // Ids are `provider:owner/repo`.
+            ids.retain(|id| !id.split_once(':').is_some_and(|(_, repo)| ignored(repo)));
+            if ids.len() < before {
+                ids.sort();
+                self.set_setting(flag, Some(&serde_json::to_string(&ids)?))?;
+            }
+        }
+        tx.commit()?;
+        self.prune_watched()
+    }
+
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)
     }
@@ -324,6 +349,21 @@ mod tests {
             flaky_workflow: false,
             watched: false,
         }
+    }
+
+    #[test]
+    fn forgetting_a_repo_drops_its_runs_and_baseline() {
+        let mut store = Store::in_memory().unwrap();
+        store.apply_poll(ProviderKind::Github, "o/r", &[run("1", 0, RunStatus::Failed)]).unwrap();
+        store.set_repo_flag("muted", "github:o/r", true).unwrap();
+        store.set_repo_flag("pinned", "github:o/keep", true).unwrap();
+        store.forget_repos(|repo| repo == "o/r").unwrap();
+        assert!(store.get_run(&run("1", 0, RunStatus::Failed).key).unwrap().is_none());
+        assert!(store.repo_flags("muted").is_empty());
+        assert_eq!(store.repo_flags("pinned"), HashSet::from(["github:o/keep".to_string()]));
+        // Following it again starts from a fresh baseline instead of notifying about old failures.
+        let changes = store.apply_poll(ProviderKind::Github, "o/r", &[run("2", 1, RunStatus::Failed)]).unwrap();
+        assert!(changes.is_empty());
     }
 
     #[test]

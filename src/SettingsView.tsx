@@ -37,6 +37,8 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
   const [quietHours, setQuietHours] = useState("");
   const [rulesSaved, setRulesSaved] = useState(true);
   const [autoRerun, setAutoRerun] = useState(false);
+  const [ignored, setIgnored] = useState("");
+  const [ignoredSaved, setIgnoredSaved] = useState(true);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +51,7 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
       setBranches(s.notifyBranches);
       setQuietHours(s.quietHours);
       setAutoRerun(s.autoRerunFlaky);
+      setIgnored(s.ignoredRepos ?? "");
       // On first run, offer it ticked; it only takes effect on "Get started".
       setLaunchAtLogin(s.launchAtLogin === null ? null : welcome ? true : s.launchAtLogin);
     });
@@ -59,8 +62,9 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
     setError(null);
     try {
       await fn();
-      setGhToken("");
-      setBbToken("");
+      // Only a token save should clear the token fields; other saves leave half-typed ones alone.
+      if (id === "gh") setGhToken("");
+      if (id === "bb") setBbToken("");
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -267,6 +271,40 @@ export function SettingsView({ statuses, onBack, welcome }: Props) {
             Open Pipescope when you log in
           </label>
           {launchAtLogin === null && <p className="hint">Only available in the built app, not in development.</p>}
+        </section>
+        <section>
+          <h3>Ignored repos</h3>
+          <label className="field">
+            <span>Don't follow repos matching</span>
+            <textarea
+              rows={3}
+              placeholder={"e.g. acme/legacy-*, old-client/*"}
+              value={ignored}
+              onChange={(e) => {
+                setIgnored(e.target.value);
+                setIgnoredSaved(false);
+              }}
+            />
+          </label>
+          <p className="hint">
+            One <code>owner/repo</code> per line or comma, with <code>*</code> for anything. A name on its own, like{" "}
+            <code>acme</code>, means all of that owner's repos. Matching repos are never
+            fetched, so they use no API calls, and their runs are removed. Build time already counted is kept. To hide a
+            repo but keep watching it, mute it instead.
+          </p>
+          <div className="row">
+            <button
+              disabled={!!busy || ignoredSaved}
+              onClick={() =>
+                run("ignored", async () => {
+                  await api.setIgnoredRepos(ignored);
+                  setIgnoredSaved(true);
+                })
+              }
+            >
+              {ignoredSaved ? "Saved" : "Save"}
+            </button>
+          </div>
         </section>
         {muted.length > 0 && (
           <section>

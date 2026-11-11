@@ -36,7 +36,7 @@ pub fn branch_allowed(patterns: &str, branch: Option<&str>) -> bool {
     patterns.iter().any(|p| glob(p, branch))
 }
 
-fn glob(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob(pattern: &str, text: &str) -> bool {
     match pattern.split_once('*') {
         None => pattern == text,
         Some((head, rest)) => {
